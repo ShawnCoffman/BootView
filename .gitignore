@@ -1,0 +1,3 @@
+# Generated collector output (history, latest run, HTML report, log).
+# Contains account names, SIDs, startup app paths and policy details - never commit.
+output/

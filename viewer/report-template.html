@@ -1,0 +1,1146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BootView</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7; --surface: #fcfcfb;
+    --ink: #0b0b0b; --ink2: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,.10); --wash: rgba(11,11,11,.05);
+    --s0: #e34948; --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --other: #b8b6ad;
+    --critical: #d03b3b; --warning: #fab219; --good: #0ca30c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --page: #0d0d0d; --surface: #1a1a19;
+      --ink: #ffffff; --ink2: #c3c2b7; --muted: #898781;
+      --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,.10); --wash: rgba(255,255,255,.06);
+      --s0: #e66767; --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --other: #55544f;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19;
+    --ink: #ffffff; --ink2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,.10); --wash: rgba(255,255,255,.06);
+    --s0: #e66767; --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --other: #55544f;
+  }
+
+  * { box-sizing: border-box; }
+  html { background: var(--page); }
+  body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 24px 16px 64px; }
+
+  header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 8px 24px; margin-bottom: 16px; }
+  h1 { margin: 0; font-size: 22px; font-weight: 650; letter-spacing: -.01em; }
+  .device { color: var(--ink2); font-size: 13px; margin-top: 2px; }
+  .btn { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 5px 12px; cursor: pointer; }
+  .btn:hover { background: var(--wash); }
+  .btn:focus-visible, .col:focus-visible, tr[tabindex]:focus-visible, select:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; }
+
+  .notice { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--s4); border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; color: var(--ink2); }
+  .notice strong { color: var(--ink); }
+  code { font: 12.5px ui-monospace, "Cascadia Mono", Consolas, monospace; background: var(--wash); padding: 1px 5px; border-radius: 4px; }
+
+  .filters { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; margin-bottom: 16px; }
+  .filters label, .ctl label { color: var(--ink2); font-size: 12px; display: block; margin-bottom: 3px; }
+  .seg { display: inline-flex; flex-wrap: wrap; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .seg button { font: inherit; background: none; border: 0; color: var(--ink2); padding: 5px 12px; cursor: pointer; border-right: 1px solid var(--border); }
+  .seg button:last-child { border-right: 0; }
+  .seg button:hover { background: var(--wash); }
+  .seg button[aria-pressed="true"] { color: var(--ink); font-weight: 650; background: var(--wash); }
+  .seg button[aria-pressed="true"]::before { content: "✓ "; }
+  .seg button:focus-visible { outline: 2px solid var(--s1); outline-offset: -2px; }
+  .seg.small button { padding: 2px 9px; font-size: 12.5px; }
+  select { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 5px 8px; }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; min-width: 0; }
+  .card h2 { margin: 0; font-size: 15px; font-weight: 650; }
+  .card .sub { color: var(--ink2); font-size: 12.5px; margin: 2px 0 12px; }
+  .cardhead { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 8px 16px; }
+  .grid { display: grid; gap: 16px; }
+  .kpis { grid-template-columns: 1.6fr repeat(4, 1fr); margin-bottom: 16px; }
+  .cards { grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); margin-top: 16px; }
+  .cards .wide { grid-column: 1 / -1; }
+  .cards .wide .row { grid-template-columns: minmax(140px, 280px) 1fr auto; }
+  @media (max-width: 960px) { .kpis { grid-template-columns: 1fr 1fr; } .kpis .hero { grid-column: 1 / -1; } }
+  @media (max-width: 460px) { .cards { grid-template-columns: 1fr; } .kpis { grid-template-columns: 1fr; } }
+  @media (max-width: 560px) {                       /* phone: bar goes under its label so it keeps a usable width */
+    .row, .cards .wide .row { grid-template-columns: 1fr auto; row-gap: 3px; padding: 3px 0; }
+    .row .name { grid-column: 1; grid-row: 1; }
+    .row .val { grid-column: 2; grid-row: 1 / span 2; align-self: start; }
+    .row .track { grid-column: 1; grid-row: 2; }
+    .row.hdr, .cards .wide .row.hdr { grid-template-columns: 1fr; padding: 0; }
+    .row.hdr > div:first-child, .row.hdr .val { display: none; }
+    .row.hdr .axis { grid-column: 1; grid-row: 1; }
+  }
+
+  .tile .label { color: var(--ink2); font-size: 12.5px; }
+  .tile .value { font-size: 28px; font-weight: 650; letter-spacing: -.01em; line-height: 1.15; margin-top: 4px; }
+  .tile .meta { color: var(--ink2); font-size: 12.5px; margin-top: 4px; }
+  .hero .value { font-size: 56px; line-height: 1.05; }
+  button.link { font: inherit; padding: 0; background: none; border: 0; color: var(--ink2); text-decoration: underline; cursor: pointer; text-align: left; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0 0 8px; padding: 0; list-style: none; color: var(--ink2); font-size: 12.5px; }
+  .legend li { display: inline-flex; align-items: center; gap: 6px; }
+  .sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; flex: none; }
+  .p-firmware { background: var(--s0); fill: var(--s0); }
+  .p-boot { background: var(--s1); fill: var(--s1); } .p-machinePolicy { background: var(--s2); fill: var(--s2); }
+  .p-auth { background: var(--s3); fill: var(--s3); } .p-profile { background: var(--s4); fill: var(--s4); }
+  .p-userPolicy { background: var(--s5); fill: var(--s5); } .p-logonTasks { background: var(--s6); fill: var(--s6); }
+  .p-other { background: var(--other); fill: var(--other); }
+  .p-signInWait { background: repeating-linear-gradient(135deg, var(--other) 0 2px, transparent 2px 5px); box-shadow: inset 0 0 0 1px var(--other); fill: url(#hatch); }
+
+  #chart { position: relative; }
+  #chart svg { display: block; width: 100%; overflow: visible; }
+  .gridline { stroke: var(--grid); stroke-width: 1; }
+  .baseline { stroke: var(--axis); stroke-width: 1; }
+  .tick { fill: var(--muted); font-size: 11px; }
+  .refline { stroke: var(--ink2); stroke-width: 1; }
+  .reflabel, .maxlabel { fill: var(--ink); font-size: 11.5px; paint-order: stroke; stroke: var(--surface); stroke-width: 3px; stroke-linejoin: round; }
+  .col { cursor: pointer; outline: none; }
+  .col .hit { fill: transparent; }
+  .col .selwash { fill: var(--wash); opacity: 0; }
+  .col.sel .selwash { opacity: 1; }
+  .hovering .col:not(.hover) .bars { opacity: .45; }
+  .col.hover .selwash, .col:focus-visible .selwash { opacity: 1; }
+  .tip { position: absolute; pointer-events: none; z-index: 5; min-width: 200px; max-width: 300px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; box-shadow: 0 6px 20px rgba(0,0,0,.18); font-size: 12.5px; display: none; }
+  .tip .t { font-weight: 650; margin-bottom: 4px; }
+  .tip .t small { font-weight: 400; color: var(--ink2); }
+  .tip .r { display: flex; align-items: center; gap: 8px; padding: 1px 0; }
+  .tip .k { width: 12px; height: 6px; border-radius: 2px; flex: none; }
+  .tip .v { font-weight: 650; min-width: 54px; }
+  .tip .n { color: var(--ink2); }
+  .tip .tot { border-top: 1px solid var(--grid); margin-top: 4px; padding-top: 4px; }
+
+  .detailhead { display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: baseline; justify-content: space-between; }
+  .badge { display: inline-block; font-size: 11.5px; font-weight: 400; padding: 1px 8px; border: 1px solid var(--border); border-radius: 999px; color: var(--ink2); margin-left: 8px; vertical-align: 2px; }
+  .facts { display: flex; flex-wrap: wrap; gap: 4px 18px; color: var(--ink2); font-size: 12.5px; margin-top: 6px; }
+  .facts b { color: var(--ink); font-weight: 650; }
+  .strip { display: flex; height: 28px; margin: 12px 0 4px; }
+  .strip > div { margin-right: 2px; position: relative; min-width: 1px; }
+  .strip > div:first-child { border-radius: 4px 0 0 4px; } .strip > div:last-child { border-radius: 0 4px 4px 0; margin-right: 0; }
+  .strip span { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+  .empty { color: var(--ink2); font-style: italic; margin: 4px 0 0; }
+
+  .rows { display: grid; gap: 2px; }
+  .row { display: grid; grid-template-columns: minmax(90px, 200px) 1fr auto; align-items: center; gap: 10px; min-height: 24px; }
+  .row .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink); }
+  .row .name.indent { padding-left: 14px; color: var(--ink2); }
+  .row .track { position: relative; height: 10px; }
+  .row .bar { position: absolute; top: 0; height: 10px; min-width: 2px; }
+  .row .bar.rank { left: 0; border-radius: 0 4px 4px 0; }
+  .row .bar.span { border-radius: 3px; }
+  .row .bar.clip { border-radius: 3px 0 0 3px; }
+  .row .mark { position: absolute; top: -3px; width: 2px; height: 16px; margin-left: -1px; background: var(--ink); border-radius: 1px; }
+  .row .mark.bad { background: var(--critical); }
+  .row .val { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 650; min-width: 74px; }
+  .row .val small { display: block; font-weight: 400; color: var(--ink2); font-size: 11px; line-height: 1.1; }
+  .row.hdr { min-height: 18px; }
+  .grp { grid-column: 1 / -1; font-size: 12px; font-weight: 650; color: var(--ink2); text-transform: uppercase; letter-spacing: .04em; margin: 10px 0 2px; border-bottom: 1px solid var(--grid); padding-bottom: 2px; }
+  .grp:first-child { margin-top: 0; }
+  .axis { position: relative; height: 16px; color: var(--muted); font-size: 11px; }
+  .axis span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
+  .axis span:first-child { transform: none; }
+  .grid-bg { background-image: linear-gradient(to right, var(--grid) 1px, transparent 1px); background-repeat: repeat-x; }
+  .slow { color: var(--ink); font-weight: 650; }
+  .note { color: var(--ink2); font-size: 12px; margin-top: 8px; }
+  .status { font-size: 11.5px; font-weight: 650; white-space: nowrap; }
+  .status.bad { color: var(--critical); } .status.warn { color: var(--ink); }
+  .status.bad::before { content: "✕ "; } .status.warn::before { content: "▲ "; color: var(--warning); }
+  dl.kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 14px; margin: 0 0 10px; }
+  dl.kv dt { color: var(--ink2); } dl.kv dd { margin: 0; font-weight: 650; font-variant-numeric: tabular-nums; min-width: 0; overflow-wrap: anywhere; }
+  .h3 { font-size: 12.5px; color: var(--ink2); font-weight: 650; margin: 12px 0 4px; }
+  .run { border-top: 1px solid var(--grid); padding-top: 8px; margin-top: 10px; }
+  .run:first-of-type { border-top: 0; }
+  .run .title { font-weight: 650; }
+  .run .meta { color: var(--ink2); font-size: 12px; margin: 1px 0 6px; }
+  ul.list { margin: 4px 0 0; padding-left: 18px; color: var(--ink2); font-size: 12.5px; }
+  ul.list li { margin: 2px 0; overflow-wrap: anywhere; }
+  ul.list li b { color: var(--ink); font-weight: 650; }
+
+  .tablewrap { max-height: 420px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  th, td { padding: 5px 10px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--grid); }
+  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
+  thead th { position: sticky; top: 0; background: var(--surface); color: var(--ink2); font-weight: 650; z-index: 1; border-bottom: 1px solid var(--axis); }
+  #table tbody tr { cursor: pointer; }
+  #table tbody tr:hover { background: var(--wash); }
+  #table tbody tr.sel { background: var(--wash); font-weight: 650; }
+  td { font-variant-numeric: tabular-nums; }
+  td.l { text-align: left; white-space: normal; overflow-wrap: anywhere; }
+  footer { margin-top: 24px; color: var(--ink2); font-size: 12px; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs><pattern id="hatch" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(135)"><rect width="2" height="5" style="fill:var(--other)"></rect></pattern></defs>
+</svg>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>BootView</h1>
+      <div class="device" id="device"></div>
+    </div>
+    <button class="btn" id="theme" type="button" title="Switch colour theme">Theme: auto</button>
+  </header>
+
+  <div id="notices"></div>
+
+  <div class="filters" id="filters">
+    <div><label>Range</label><div class="seg" id="f-range" role="group" aria-label="Range"></div></div>
+    <div><label for="f-type">Boot type</label><select id="f-type"></select></div>
+    <div><label>Timeline</label><div class="seg" id="f-view" role="group" aria-label="Timeline"></div></div>
+    <div><label>Sign-in screen wait</label><div class="seg" id="f-wait" role="group" aria-label="Sign-in screen wait"></div></div>
+  </div>
+
+  <div id="content">
+    <div class="grid kpis" id="kpis"></div>
+
+    <section class="card" aria-labelledby="chart-h">
+      <h2 id="chart-h">Where each boot's time goes</h2>
+      <p class="sub" id="chart-sub"></p>
+      <ul class="legend" id="legend"></ul>
+      <div id="chart"></div>
+    </section>
+
+    <section class="card" style="margin-top:16px" aria-labelledby="detail-h" id="detail"></section>
+
+    <section class="card" style="margin-top:16px" aria-labelledby="typ-h" id="typical"></section>
+
+    <section class="card" style="margin-top:16px" aria-labelledby="table-h">
+      <div class="cardhead">
+        <div><h2 id="table-h">All boots</h2><p class="sub">Same data as the chart, as a table. Select a row to inspect that boot.</p></div>
+        <button class="btn" id="csv" type="button">Download CSV</button>
+      </div>
+      <div class="tablewrap"><table id="table"></table></div>
+    </section>
+  </div>
+
+  <footer id="foot"></footer>
+</div>
+
+<script id="bootview-data" type="application/json">__BOOTVIEW_DATA__</script>
+<script>
+(function () {
+  'use strict';
+
+  // ------------------------------------------------------------------ data
+  var DATA;
+  try { DATA = JSON.parse(document.getElementById('bootview-data').textContent); } catch (e) { DATA = null; }
+  if (!DATA || !DATA.boots) {
+    document.getElementById('content').replaceChildren(el('p', { class: 'empty' }, 'No data embedded. Run Collect-BootData.ps1 to generate a report.'));
+    return;
+  }
+
+  var PHASES = [
+    { key: 'firmware',      label: 'Firmware + boot loader', hint: 'UEFI/BIOS POST (Task Manager’s “Last BIOS time”), then Windows Boot Manager and the OS loader, including any BitLocker PIN entry.' },
+    { key: 'boot',          label: 'Windows boot',           hint: 'Kernel start until the sign-in screen is ready (Winlogon finished its startup notifications).' },
+    { key: 'machinePolicy', label: 'Computer policy',        hint: 'Time Winlogon waited for computer Group Policy at startup (synchronous processing only).' },
+    { key: 'signInWait',    label: 'Sign-in screen wait',    hint: 'The sign-in screen was ready and waiting for the user. Not a performance problem; excluded unless included above.' },
+    { key: 'auth',          label: 'Authentication',         hint: 'Winlogon authentication.' },
+    { key: 'profile',       label: 'Profile load',           hint: 'User Profile Service logon processing.' },
+    { key: 'userPolicy',    label: 'User policy',            hint: 'Time sign-in waited for user Group Policy (synchronous processing only).' },
+    { key: 'logonTasks',    label: 'Logon tasks',            hint: 'Shell logon tasks (AllLogonTasks) until the desktop is ready.' },
+    { key: 'other',         label: 'Other / unattributed',   hint: 'Time between measured steps after sign-in.' }
+  ];
+  var VIEWS = {
+    power: { label: 'Power-on → ready', sub: 'Power-on to desktop ready' },
+    boot:  { label: 'Windows start → ready', sub: 'Windows kernel start to desktop ready (excludes firmware)' },
+    logon: { label: 'Sign-in → ready', sub: 'Authentication to desktop ready' }
+  };
+  var LOGON_KEYS = { auth: 1, profile: 1, userPolicy: 1, logonTasks: 1, other: 1 };
+  var BOOT_TYPES = { 0: 'Full boot', 1: 'Fast startup', 2: 'Hibernate resume' };
+  var WINLOGON_SHOWN = { 0: 1, 2: 1, 12: 1, 4: 1, 5: 1 };
+  var SRC = DATA.sources || {};
+  var DEV = DATA.device || {};
+
+  var boots = DATA.boots.slice().sort(function (a, b) { return a.bootStartMs - b.bootStartMs; });
+  var latestMs = boots.length ? boots[boots.length - 1].bootStartMs : 0;
+  var hasFirmware = boots.some(function (b) { return b.totals && isNum(b.totals.firmwareMs); });
+  var state = { range: 30, type: 'all', view: hasFirmware ? 'power' : 'boot', wait: false, selected: null, wf: 'ready', typ: 'phases' };
+
+  // ------------------------------------------------------------------ helpers
+  function el(tag, props) {
+    var node = document.createElement(tag);
+    if (props) Object.keys(props).forEach(function (k) {
+      var v = props[k];
+      if (v == null || v === false) return;
+      if (k === 'class') node.className = v;
+      else if (k === 'style') node.style.cssText = v;
+      else if (k.indexOf('on') === 0) node.addEventListener(k.slice(2), v);
+      else node.setAttribute(k, v === true ? '' : v);
+    });
+    for (var i = 2; i < arguments.length; i++) append(node, arguments[i]);
+    return node;
+  }
+  function append(node, kid) {                       // data is untrusted: only ever text nodes, never innerHTML
+    if (kid == null || kid === false) return;
+    if (Array.isArray(kid)) { kid.forEach(function (k) { append(node, k); }); return; }
+    node.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+  }
+  var SVGNS = 'http://www.w3.org/2000/svg';
+  function svg(tag, props) {
+    var node = document.createElementNS(SVGNS, tag);
+    if (props) Object.keys(props).forEach(function (k) { if (props[k] != null) node.setAttribute(k, props[k]); });
+    for (var i = 2; i < arguments.length; i++) append(node, arguments[i]);
+    return node;
+  }
+  function $(id) { return document.getElementById(id); }
+  function arr(x) { return Array.isArray(x) ? x : (x == null ? [] : [x]); }   // 1-item lists can arrive as scalars from older data
+
+  function fmt(ms) {
+    if (ms == null || isNaN(ms)) return '–';
+    if (Math.abs(ms) < 1000) return Math.round(ms) + ' ms';
+    var s = ms / 1000;
+    if (Math.abs(s) < 60) return s.toFixed(Math.abs(s) < 10 ? 2 : 1) + ' s';
+    var m = Math.floor(s / 60);
+    if (m < 60) return m + 'm ' + Math.round(s - m * 60) + 's';
+    return Math.floor(m / 60) + 'h ' + (m % 60) + 'm';
+  }
+  function fmtShort(ms) { return ms == null || isNaN(ms) ? '–' : (ms / 1000).toFixed(1) + ' s'; }
+  function median(a) { a = a.filter(isNum).sort(function (x, y) { return x - y; }); if (!a.length) return null; var m = a.length >> 1; return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2; }
+  function pct(a, p) { a = a.filter(isNum).sort(function (x, y) { return x - y; }); if (!a.length) return null; return a[Math.min(a.length - 1, Math.ceil(p * a.length) - 1)]; }
+  function isNum(v) { return typeof v === 'number' && isFinite(v); }
+  function dt(ms) { return new Date(ms); }
+  function dateLabel(ms) { return dt(ms).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' }); }
+  function dateLong(ms) { return dt(ms).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); }
+  function niceStep(max, count) {
+    if (!(max > 0)) return 1;
+    var raw = max / count, mag = Math.pow(10, Math.floor(Math.log10(raw))), n = raw / mag;
+    return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * mag;
+  }
+  function phaseMs(b, key) { return (b.phases || []).reduce(function (s, p) { return s + (p.key === key ? p.durMs : 0); }, 0); }
+  function bootTypeName(t) { return BOOT_TYPES[t] || 'Unknown type'; }
+  function label(key) { var p = PHASES.filter(function (x) { return x.key === key; })[0]; return p ? p.label : key; }
+  function hex(n) { return isNum(n) ? '0x' + (n >>> 0).toString(16).toUpperCase() : n; }
+  function sumBy(a, f) { return a.reduce(function (s, x) { var v = f(x); return s + (isNum(v) ? v : 0); }, 0); }
+
+  var measureCtx = document.createElement('canvas').getContext('2d');
+  function textW(str, font) { measureCtx.font = font || '600 11.5px system-ui, "Segoe UI", sans-serif'; return measureCtx.measureText(str).width; }
+
+  // ------------------------------------------------------------------ filtering
+  function visible() {
+    var min = state.range ? latestMs - state.range * 86400000 : -Infinity;
+    return boots.filter(function (b) {
+      if (b.bootStartMs < min) return false;
+      if (state.type !== 'all' && b.bootType !== Number(state.type)) return false;
+      return true;
+    });
+  }
+  // only boots whose logon completed (AllLogonTasks finished) are charted, so chart and KPI tiles describe the same set
+  function charted(list) { return list.filter(function (b) { return (b.phases || []).length && b.totals && isNum(b.totals.readyMs); }); }
+  function includedPhases() {
+    return PHASES.filter(function (p) {
+      if (p.key === 'signInWait' && !(state.wait && state.view !== 'logon')) return false;
+      if (state.view === 'logon') return !!LOGON_KEYS[p.key];
+      if (state.view === 'boot') return p.key !== 'firmware';
+      return true;
+    });
+  }
+  function bootTotal(b) { return includedPhases().reduce(function (s, p) { return s + phaseMs(b, p.key); }, 0); }
+
+  // ------------------------------------------------------------------ header, notices, filters
+  function renderHeader() {
+    var d = DEV;
+    var bits = [d.name, [d.manufacturer, d.model].filter(Boolean).join(' '), d.cpu, d.os && (d.os + (d.build ? ' (' + d.build + ')' : '')), d.systemDisk,
+      d.ramGb && d.ramGb + ' GB RAM', d.serial && ('S/N ' + d.serial), d.joinType, d.mdm && ('MDM: ' + d.mdm), d.ime && ('IME ' + d.ime),
+      d.fastStartup != null && ('Fast startup ' + (d.fastStartup ? 'on' : 'off')), d.anonymized && 'account names anonymised'].filter(Boolean);
+    $('device').textContent = bits.join(' · ');
+    $('foot').textContent = 'Collected ' + dateLong(DATA.collectedMs) + ' · ' + boots.length + ' boots in history · schema ' + DATA.schema +
+      (DATA.toolVersion ? ' · BootView ' + DATA.toolVersion : '') + (DEV.psVersion ? ' · PowerShell ' + DEV.psVersion : '') + (DEV.system ? ' · ran as SYSTEM' : DEV.elevated ? ' · elevated' : '') +
+      ' · Times come from Windows event logs; overlapping work can add up to more than wall-clock time.';
+  }
+
+  function renderNotices() {
+    var host = $('notices'); host.replaceChildren();
+    var need = [], none = [];
+    [['Diagnostics-Performance', 'Windows boot trace and boot-degradation detail'], ['Group Policy', 'Group Policy runs, extensions and GPOs'],
+      ['Intune Management Extension', 'Intune scripts, remediations and Win32 apps']].forEach(function (p) {
+      var s = SRC[p[0]];
+      if (!s) return;
+      if (s.status === 'denied') need.push(p[1]);
+      else if (s.status === 'error') none.push(p[1] + ' (' + p[0] + ': ' + s.message + ')');
+    });
+    if (need.length) {
+      host.append(el('div', { class: 'notice', role: 'note' },
+        el('strong', null, 'Some data needs an elevated collector run. '),
+        'Not included: ' + need.join('; ') + '. Run ', el('code', null, '.\\Collect-BootData.ps1 -Open'), ' from an administrator PowerShell (or as SYSTEM through Intune) to add it.'));
+    }
+    if (DEV.mdm === 'Intune' && SRC['Intune MDM: sync sessions'] && SRC['Intune MDM: sync sessions'].status === 'empty') {
+      none.push('Intune MDM sync sessions (the Sync log is empty – it may be disabled on this build)');
+    }
+    if (none.length) host.append(el('div', { class: 'notice', role: 'note' }, el('strong', null, 'Not available: '), none.join('; ') + '.'));
+  }
+
+  function segButtons(host, items, current, onPick) {
+    host.replaceChildren();
+    items.forEach(function (it) {
+      host.append(el('button', { type: 'button', 'aria-pressed': String(current === it[0]), onclick: function () { onPick(it[0]); } }, it[1]));
+    });
+  }
+  function renderFilters() {
+    segButtons($('f-range'), [[7, 'Last 7 days'], [30, 'Last 30 days'], [60, 'Last 60 days'], [0, 'All']], state.range, function (v) { state.range = v; update(); });
+    var views = Object.keys(VIEWS).filter(function (k) { return k !== 'power' || hasFirmware; }).map(function (k) { return [k, VIEWS[k].label]; });
+    segButtons($('f-view'), views, state.view, function (v) { state.view = v; update(); });
+    segButtons($('f-wait'), [[false, 'Exclude'], [true, 'Include']], state.wait, function (v) { state.wait = v; update(); });
+    var sel = $('f-type'); sel.replaceChildren();
+    var present = {}; boots.forEach(function (b) { present[b.bootType == null ? 'unk' : b.bootType] = 1; });
+    sel.append(el('option', { value: 'all' }, 'All boot types'));
+    Object.keys(BOOT_TYPES).forEach(function (t) { if (present[t]) sel.append(el('option', { value: t }, BOOT_TYPES[t] + 's')); });
+    sel.value = state.type;
+    sel.onchange = function () { state.type = sel.value; update(); };
+  }
+
+  // ------------------------------------------------------------------ KPIs
+  function tot(list, key) { return list.map(function (b) { return b.totals && b.totals[key]; }).filter(isNum); }
+  function renderKpis(list) {
+    var host = $('kpis'); host.replaceChildren();
+    var data = charted(list), totals = data.map(bootTotal);
+    var fwl = list.map(function (b) { var t = b.totals || {}; return isNum(t.firmwareMs) ? t.firmwareMs + (t.loaderMs || 0) : null; }).filter(isNum);
+    var core = tot(list, 'coreBootMs'), after = tot(list, 'signInToReadyMs');
+    var slowest = null;
+    data.forEach(function (b, i) { if (!slowest || totals[i] > slowest.r) slowest = { b: b, r: totals[i] }; });
+
+    host.append(el('div', { class: 'card tile hero' },
+      el('div', { class: 'label' }, 'Median ' + VIEWS[state.view].label + (state.view !== 'logon' ? (state.wait ? ' (incl. sign-in wait)' : ' (excl. sign-in wait)') : '')),
+      el('div', { class: 'value' }, fmtShort(median(totals))),
+      el('div', { class: 'meta' }, totals.length ? 'P90 ' + fmtShort(pct(totals, 0.9)) + ' · ' + totals.length + ' boots with full logon data' : 'No boots with complete logon data in this range')));
+    host.append(el('div', { class: 'card tile' },
+      el('div', { class: 'label' }, 'Median firmware + loader'),
+      el('div', { class: 'value' }, fmtShort(median(fwl))),
+      el('div', { class: 'meta' }, fwl.length ? 'Before Windows starts · P90 ' + fmtShort(pct(fwl, 0.9)) : 'No firmware timing recorded')));
+    host.append(el('div', { class: 'card tile' },
+      el('div', { class: 'label' }, 'Median Windows start → sign-in screen'),
+      el('div', { class: 'value' }, fmtShort(median(core))),
+      el('div', { class: 'meta' }, 'P90 ' + fmtShort(pct(core, 0.9)))));
+    host.append(el('div', { class: 'card tile' },
+      el('div', { class: 'label' }, 'Median sign-in → ready'),
+      el('div', { class: 'value' }, fmtShort(median(after))),
+      el('div', { class: 'meta' }, 'P90 ' + fmtShort(pct(after, 0.9)))));
+    host.append(el('div', { class: 'card tile' },
+      el('div', { class: 'label' }, 'Slowest boot (' + VIEWS[state.view].label + ')'),
+      el('div', { class: 'value' }, slowest ? fmtShort(slowest.r) : '–'),
+      el('div', { class: 'meta' }, slowest ? el('button', { class: 'link', type: 'button', onclick: function () { state.selected = slowest.b.id; update(); } }, dateLong(slowest.b.bootStartMs)) : '')));
+  }
+
+  // ------------------------------------------------------------------ column chart
+  var tip = null;
+  function renderLegend() {
+    var ul = $('legend'); ul.replaceChildren();
+    includedPhases().forEach(function (p) { ul.append(el('li', { title: p.hint }, el('span', { class: 'sw p-' + p.key }), p.label)); });
+  }
+
+  function drawChart(list) {
+    var host = $('chart'); host.replaceChildren();
+    var data = charted(list);
+    var skipped = list.length - data.length;
+    var noFw = state.view === 'power' ? data.filter(function (b) { return !isNum(b.totals.firmwareMs); }).length : 0;
+    $('chart-sub').textContent = VIEWS[state.view].sub + ', one column per boot' +
+      (skipped ? ' · ' + skipped + ' boot' + (skipped > 1 ? 's' : '') + ' without complete logon data omitted (event logs had already rolled over)' : '') +
+      (noFw ? ' · ' + noFw + ' older boot' + (noFw > 1 ? 's have' : ' has') + ' no firmware timing' : '') + '.';
+    if (!data.length) { host.append(el('p', { class: 'empty' }, 'No boots with timing data in this range.')); return; }
+
+    var W = Math.max(320, host.clientWidth), H = 300, m = { l: 46, r: 8, t: 22, b: 34 };
+    var iw = W - m.l - m.r, ih = H - m.t - m.b;
+    var totals = data.map(bootTotal);
+    var maxV = Math.max.apply(null, totals) || 1;
+    var step = niceStep(maxV * 1.05 / 1000, 5) * 1000;
+    var yMax = Math.ceil(maxV * 1.05 / step) * step;
+    function y(v) { return m.t + ih - (v / yMax) * ih; }
+
+    var s = svg('svg', { viewBox: '0 0 ' + W + ' ' + H, role: 'img', 'aria-label': 'Stacked columns of boot phase durations, one column per boot. A table of the same data follows below.' });
+    for (var v = 0; v <= yMax + 1; v += step) {
+      s.append(svg('line', { class: v === 0 ? 'baseline' : 'gridline', x1: m.l, x2: W - m.r, y1: y(v), y2: y(v) }));
+      s.append(svg('text', { class: 'tick', x: m.l - 8, y: y(v) + 4, 'text-anchor': 'end' }, (v / 1000).toLocaleString() + ' s'));
+    }
+    var med = median(totals);
+    if (isNum(med)) {
+      s.append(svg('line', { class: 'refline', x1: m.l, x2: W - m.r, y1: y(med), y2: y(med) }));
+      s.append(svg('text', { class: 'reflabel', x: m.l + 6, y: y(med) - 5 }, 'median ' + fmtShort(med)));
+    }
+
+    var n = data.length, slot = iw / n, bw = Math.min(24, Math.max(3, slot * 0.62));
+    var every = Math.max(1, Math.ceil(n / Math.max(2, Math.floor(iw / 52))));
+    var maxIdx = totals.indexOf(Math.max.apply(null, totals));
+    var phases = includedPhases();
+    var GAP = 2;
+
+    data.forEach(function (b, i) {
+      var cx = m.l + slot * i + slot / 2, x0 = cx - bw / 2;
+      var g = svg('g', { class: 'col' + (b.id === state.selected ? ' sel' : ''), tabindex: 0, role: 'button', 'aria-label': dateLong(b.bootStartMs) + ', ' + fmt(totals[i]) + '. Select for detail.' });
+      g.append(svg('rect', { class: 'selwash', x: m.l + slot * i, y: m.t, width: slot, height: ih }));
+      var bars = svg('g', { class: 'bars' });
+      var segs = phases.map(function (p) { return { p: p, v: phaseMs(b, p.key) }; }).filter(function (q) { return q.v > 0; });
+      var acc = 0;
+      segs.forEach(function (q, si) {
+        var top = y(acc + q.v), bot = y(acc);
+        acc += q.v;
+        var y0 = top + (si < segs.length - 1 ? GAP / 2 : 0), y1 = bot - (si > 0 ? GAP / 2 : 0);
+        if (y1 - y0 < 0.75) return;
+        var topmost = si === segs.length - 1, r = topmost ? Math.min(4, (y1 - y0), bw / 2) : 0;
+        var d = r > 0
+          ? 'M' + x0 + ',' + y1 + 'V' + (y0 + r) + 'A' + r + ',' + r + ' 0 0 1 ' + (x0 + r) + ',' + y0 + 'H' + (x0 + bw - r) + 'A' + r + ',' + r + ' 0 0 1 ' + (x0 + bw) + ',' + (y0 + r) + 'V' + y1 + 'Z'
+          : 'M' + x0 + ',' + y0 + 'H' + (x0 + bw) + 'V' + y1 + 'H' + x0 + 'Z';
+        bars.append(svg('path', { class: 'p-' + q.p.key, d: d }));
+      });
+      g.append(bars);
+      g.append(svg('rect', { class: 'hit', x: m.l + slot * i, y: m.t - 8, width: slot, height: ih + 8 }));
+      var showTip = function (evt) { hover(g, b, totals[i], evt, host, cx, y(totals[i])); };
+      g.addEventListener('pointerenter', showTip);
+      g.addEventListener('pointermove', showTip);
+      g.addEventListener('focus', function () { hover(g, b, totals[i], null, host, cx, y(totals[i])); });
+      g.addEventListener('pointerleave', function () { unhover(g, s); });
+      g.addEventListener('blur', function () { unhover(g, s); });
+      g.addEventListener('click', function () { state.selected = b.id; update(); });
+      g.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); state.selected = b.id; update(); } });
+      s.append(g);
+
+      if (i % every === 0) s.append(svg('text', { class: 'tick', x: cx, y: H - 10, 'text-anchor': 'middle' }, dateLabel(b.bootStartMs)));
+      if (b.id === state.selected) s.append(svg('rect', { x: cx - bw / 2, y: m.t + ih + 5, width: bw, height: 3, rx: 1.5, fill: 'var(--ink)' }));
+      if (i === maxIdx) {
+        var lx = Math.min(W - m.r - 20, Math.max(m.l + 20, cx));
+        s.append(svg('text', { class: 'maxlabel', x: lx, y: y(totals[i]) - 6, 'text-anchor': 'middle' }, fmtShort(totals[i])));
+      }
+    });
+    host.append(s);
+    tip = el('div', { class: 'tip', role: 'tooltip' });
+    host.append(tip);
+  }
+
+  function hover(g, b, total, evt, host, cx, cy) {
+    var root = g.ownerSVGElement;
+    root.parentNode.classList.add('hovering');
+    root.querySelectorAll('.col.hover').forEach(function (c) { c.classList.remove('hover'); });
+    g.classList.add('hover');
+    var rowEls = includedPhases().map(function (p) {
+      var v = phaseMs(b, p.key);
+      return v > 0 ? el('div', { class: 'r' }, el('span', { class: 'k p-' + p.key }), el('span', { class: 'v' }, fmt(v)), el('span', { class: 'n' }, p.label)) : null;
+    }).filter(Boolean);
+    tip.replaceChildren.apply(tip, [el('div', { class: 't' }, dateLong(b.bootStartMs), ' ', el('small', null, bootTypeName(b.bootType)))].concat(rowEls, [
+      el('div', { class: 'r tot' }, el('span', { class: 'k', style: 'background:var(--ink2)' }), el('span', { class: 'v' }, fmt(total)), el('span', { class: 'n' }, VIEWS[state.view].label))]));
+    tip.style.display = 'block';
+    var hr = host.getBoundingClientRect();
+    var px = evt ? evt.clientX - hr.left : (root.getBoundingClientRect().width / root.viewBox.baseVal.width) * cx;
+    var py = evt ? evt.clientY - hr.top : cy;
+    var left = px + 14; if (left + tip.offsetWidth > host.clientWidth) left = px - tip.offsetWidth - 14;
+    tip.style.left = Math.max(0, left) + 'px';
+    tip.style.top = Math.max(0, Math.min(py - 10, 300 - tip.offsetHeight)) + 'px';
+  }
+  function unhover(g, root) {
+    g.classList.remove('hover');
+    if (!root.querySelector('.col.hover')) root.parentNode.classList.remove('hovering');
+    if (tip) tip.style.display = 'none';
+  }
+
+  // ------------------------------------------------------------------ detail: shared pieces
+  function typicalMap(list, getter) {
+    var acc = {}, withData = 0;
+    list.forEach(function (b) {
+      var items = getter(b);
+      if (!items || !items.length) return;
+      withData++;
+      items.forEach(function (t) { if (isNum(t.durMs)) (acc[t.name] = acc[t.name] || []).push(t.durMs); });
+    });
+    var out = {};
+    Object.keys(acc).forEach(function (k) { if (acc[k].length >= Math.max(3, withData * 0.4)) out[k] = median(acc[k]); });
+    return out;
+  }
+  function slowFlag(v, typ) { return isNum(typ) && v >= 500 && v >= typ * 3; }
+  function sourceMessage(label, whatMissing) {
+    var s = SRC[label];
+    if (s && s.status === 'denied') return 'Not collected: needs an elevated collector run.';
+    if (s && (s.status === 'missing' || s.status === 'error')) return (s.message || 'Log unavailable (' + s.status + ')') + '';
+    return whatMissing;
+  }
+  function statusEl(kind, text) { return el('span', { class: 'status ' + kind }, text); }
+
+  function axisRow(originMs, spanMs, stepMs, unit) {
+    var ax = el('div', { class: 'axis' });
+    for (var t = 0; t <= spanMs + 1; t += stepMs) ax.append(el('span', { style: 'left:' + (t / spanMs * 100) + '%' }, (Math.round(t / 100) / 10) + ' s'));
+    return el('div', { class: 'row hdr' }, el('div', { class: 'name', style: 'color:var(--muted);font-size:11px' }, unit || ''), ax, el('div', { class: 'val' }));
+  }
+
+  function rankRows(items, cls, typ, fmtVal) {
+    var max = Math.max.apply(null, items.map(function (i) { return i.ms; }).concat([1]));
+    var rows = el('div', { class: 'rows' });
+    items.forEach(function (it) {
+      var tp = typ && typ[it.name], slow = slowFlag(it.ms, tp);
+      var small = it.small || (isNum(tp) ? (slow ? '×' + Math.round(it.ms / Math.max(tp, 1)) + ' typical (' + fmt(tp) + ')' : 'typical ' + fmt(tp)) : null);
+      rows.append(el('div', { class: 'row', title: it.title || it.name },
+        el('div', { class: 'name' + (slow ? ' slow' : '') + (it.indent ? ' indent' : '') }, it.name, it.status ? [' ', it.status] : null),
+        el('div', { class: 'track' }, el('div', { class: 'bar rank ' + (it.cls || cls), style: 'width:' + (Math.max(0, it.ms) / max * 100) + '%' })),
+        el('div', { class: 'val' }, fmtVal ? fmtVal(it.ms) : fmt(it.ms), small ? el('small', null, small) : null)));
+    });
+    return rows;
+  }
+  function rankCard(title, sub, items, cls, typ, emptyMsg, wide) {
+    var card = el('section', { class: 'card' + (wide ? ' wide' : '') }, el('h2', null, title), el('p', { class: 'sub' }, sub));
+    card.append(items.length ? rankRows(items, cls, typ) : el('p', { class: 'empty' }, emptyMsg));
+    return card;
+  }
+
+  // ------------------------------------------------------------------ detail: the whole-boot waterfall
+  function waterfallItems(b) {
+    var s0 = b.bootStartMs, t = b.totals || {}, fw = b.firmware || {}, lg = b.logon || {}, items = [];
+    function add(g, name, s, e, cls, o) { if (isNum(s)) items.push({ g: g, name: name, s: s, e: isNum(e) ? e : null, cls: cls, o: o || {} }); }
+    function rel(ms) { return isNum(ms) ? ms - s0 : null; }
+    var G = { boot: 'Power-on and Windows boot', wl: 'Winlogon: what startup and sign-in waited for', gp: 'Group Policy', sign: 'Sign-in',
+      desk: 'Desktop and startup apps', mgmt: 'Network and Intune', bad: 'Problems' };
+
+    var ld = fw.loaderMs || 0;
+    if (isNum(fw.firmwareMs)) add(G.boot, 'Firmware (POST)', -(fw.firmwareMs + ld), -ld, 'p-firmware', { title: 'UEFI/BIOS from power-on until Windows Boot Manager started (Task Manager “Last BIOS time”).' });
+    if (fw.loaderMs) add(G.boot, 'Boot manager + OS loader', -ld, 0, 'p-firmware', { small: fw.bitlockerWaitMs ? 'incl. BitLocker PIN ' + fmt(fw.bitlockerWaitMs) : null });
+    var p = b.perf;
+    if (p && p.fields) {
+      var o = p.offsetMs || 0, f = p.fields;
+      if (isNum(f.BootPNPInitStartTimeMS) && f.BootPNPInitDuration > 0) add(G.boot, 'Boot drivers + devices (PnP)', o + f.BootPNPInitStartTimeMS, o + f.BootPNPInitStartTimeMS + f.BootPNPInitDuration, 'p-boot');
+      if (isNum(f.SystemPNPInitStartTimeMS) && f.SystemPNPInitDuration > 0) add(G.boot, 'System drivers + devices (PnP)', o + f.SystemPNPInitStartTimeMS, o + f.SystemPNPInitStartTimeMS + f.SystemPNPInitDuration, 'p-boot');
+      var sess = (f.Session0InitDuration || 0) + (f.Session1InitDuration || 0) + (f.SessionInitOtherDuration || 0);
+      if (isNum(f.SessionInitStartTimeMS) && sess > 0) add(G.boot, 'Session init (smss, services)', o + f.SessionInitStartTimeMS, o + f.SessionInitStartTimeMS + sess, 'p-boot');
+      if (isNum(f.WinLogonStartTimeMS)) add(G.boot, 'Winlogon starts', o + f.WinLogonStartTimeMS, null, null, { marker: true });
+      if (isNum(p.mainPathMs)) add(G.boot, 'Boot trace: main path done', o + p.mainPathMs, null, null, { marker: true, title: 'Windows’ boot trace main path (MainPathBootTime).' });
+      if (isNum(p.bootTimeMs)) add(G.boot, 'Boot trace: post-boot done', o + p.bootTimeMs, null, null, { marker: true, title: 'System settled after boot (BootTime = main path + post-boot).' });
+    }
+    if (isNum(t.coreBootMs)) add(G.boot, 'Windows start → sign-in screen', 0, t.coreBootMs, 'p-boot');
+
+    arr(b.winlogon).forEach(function (w) {
+      if (!WINLOGON_SHOWN[w.event]) return;
+      var key = w.subscriber === 'GPClient' ? (w.event === 0 ? 'p-machinePolicy' : 'p-userPolicy') : w.subscriber === 'Profiles' ? 'p-profile' : 'p-other';
+      if (w.durMs >= 5 || ((w.subscriber === 'GPClient' || w.subscriber === 'Profiles') && (w.event === 0 || w.event === 2))) add(G.wl, w.subscriber + ' · ' + w.eventName, rel(w.startMs), rel(w.endMs), key);
+    });
+
+    var pol = b.policy || {};
+    arr(pol.runs).forEach(function (r) {
+      var cls = r.scope === 'machine' ? 'p-machinePolicy' : 'p-userPolicy';
+      add(G.gp, (r.scope === 'machine' ? 'Computer' : 'User') + ' policy · ' + r.trigger, rel(r.startMs), rel(r.endMs), cls,
+        { small: r.blocking ? 'synchronous' : r.async ? 'asynchronous' : r.background ? 'background' : null, status: r.errorCode ? statusEl('bad', 'error') : null });
+      arr(r.extensions).slice().sort(function (a, c) { return (a.startMs || 0) - (c.startMs || 0); }).slice(0, 12).forEach(function (x) {
+        add(G.gp, x.name, rel(x.startMs), rel(x.endMs), cls, { indent: true, status: x.result === 'error' ? statusEl('bad', 'error') : x.result === 'warning' ? statusEl('warn', 'warning') : null });
+      });
+    });
+    if (!arr(pol.runs).length) arr(pol.system).forEach(function (x) {
+      if (isNum(x.ms)) add(G.gp, (x.scope === 'user' ? 'User' : 'Computer') + ' policy (System log)', rel(x.t - x.ms), rel(x.t), x.scope === 'user' ? 'p-userPolicy' : 'p-machinePolicy', { status: x.ok ? null : statusEl('bad', 'failed') });
+    });
+
+    var phaseOf = function (k) { return (b.phases || []).filter(function (q) { return q.key === k; })[0]; };
+    var w = phaseOf('signInWait');
+    if (w) add(G.sign, 'Sign-in screen wait', w.startMs, w.startMs + w.durMs, 'p-signInWait');
+    if (lg.auth) add(G.sign, 'Authentication', rel(lg.auth.startMs), rel(lg.auth.endMs), 'p-auth', { small: lg.failedAuth ? lg.failedAuth + ' failed attempt' + (lg.failedAuth > 1 ? 's' : '') : null });
+    if (lg.profile) add(G.sign, 'Profile load', rel(lg.profile.startMs), rel(lg.profile.endMs), 'p-profile');
+
+    if (lg.allTasks) add(G.desk, 'All logon tasks', rel(lg.allTasks.startMs), rel(lg.allTasks.endMs), 'p-logonTasks');
+    arr(lg.tasks).slice(0, 6).forEach(function (x) { add(G.desk, x.name, rel(x.startMs), rel(x.endMs), 'p-logonTasks', { indent: true }); });
+    arr(lg.shellPhases).filter(function (x) { return x.durMs > 0; }).slice().sort(function (a, c) { return c.durMs - a.durMs; }).slice(0, 5)
+      .forEach(function (x) { add(G.desk, x.name, rel(x.startMs), rel(x.endMs), 'p-logonTasks'); });
+    arr(lg.startupApps).slice(0, 8).forEach(function (x) { add(G.desk, x.name, rel(x.startMs), rel(x.endMs), 'p-logonTasks', { title: x.command, small: x.kind === 'packaged' ? 'packaged app' : null }); });
+
+    if (b.network) add(G.mgmt, 'Network connected', rel(b.network.firstConnectedMs), null, null, { marker: true, small: arr(b.network.connects).map(function (c) { return c.category; }).filter(Boolean).slice(-1)[0] });
+    var mdm = b.mdm || {};
+    arr(mdm.sessions).forEach(function (x) { add(G.mgmt, 'Intune MDM sync', rel(x.startMs), rel(x.endMs), 'p-other', { status: x.ok === false ? statusEl('bad', 'failed') : null }); });
+    arr(mdm.bursts).forEach(function (x) {
+      add(G.mgmt, 'MDM settings applied (' + x.count + ')', rel(x.startMs), rel(x.endMs), 'p-other', { title: arr(x.areas).map(function (a) { return a.name + ' ×' + a.count; }).join(', ') });
+    });
+    var ime = b.ime || {};
+    if (isNum(ime.firstMs)) add(G.mgmt, 'Intune Management Extension active', rel(ime.firstMs), null, null, { marker: true });
+    arr(ime.units).slice().sort(function (a, c) { return c.durMs - a.durMs; }).slice(0, 10).forEach(function (u) {
+      add(G.mgmt, imeName(u), rel(u.startMs), rel(u.endMs), 'p-other', { indent: true, title: u.kind + ' ' + (u.id || '') + (u.result ? ' · result ' + u.result : ''), status: u.errors ? statusEl('bad', u.errors + ' error' + (u.errors > 1 ? 's' : '')) : null });
+    });
+
+    arr(b.issues).forEach(function (x) { add(G.bad, x.source + ' ' + x.id, rel(x.t), null, null, { marker: true, bad: true, title: x.text }); });
+    return { items: items, groups: [G.boot, G.wl, G.gp, G.sign, G.desk, G.mgmt, G.bad] };
+  }
+  function imeName(u) {
+    var kinds = { script: 'Script', remediation: 'Remediation', win32app: 'Win32 app', checkin: 'Check-in', executor: 'Script run' };
+    if (u.kind === 'win32app' && u.name && u.name !== u.id) return 'Win32 app: ' + u.name;
+    if (u.id && (u.name === u.id)) return (kinds[u.kind] || u.kind) + ' ' + u.id.slice(0, 8);
+    return u.name || kinds[u.kind] || u.kind;
+  }
+
+  function waterfallCard(b) {
+    var card = el('section', { class: 'card wide' });
+    var seg = el('div', { class: 'seg small', role: 'group', 'aria-label': 'Waterfall range' });
+    segButtons(seg, [['ready', 'Until desktop ready'], ['all', 'Everything (' + (DEV.windowMinutes || 15) + '-min window)']], state.wf, function (v) { state.wf = v; renderDetail(visible()); });
+    card.append(el('div', { class: 'cardhead' },
+      el('div', null, el('h2', null, 'The whole boot, step by step'),
+        el('p', { class: 'sub' }, 'Every measured step positioned on one clock from power-on (or Windows start when firmware timing is missing). Work in the same group can overlap. Markers are single moments.')),
+      seg));
+    var wf = waterfallItems(b), items = wf.items;
+    if (!items.length) { card.append(el('p', { class: 'empty' }, 'No timing events for this boot.')); return card; }
+    var origin = Math.min.apply(null, items.map(function (i) { return i.s; }).concat([0]));
+    var t = b.totals || {};
+    var readyEnd = Math.max(t.readyMs || 0, t.coreBootMs || 0, t.toSignInMs || 0);
+    var allEnd = Math.max.apply(null, items.map(function (i) { return isNum(i.e) ? i.e : i.s; }));
+    var end = state.wf === 'ready' && readyEnd > 0 ? readyEnd * 1.04 : allEnd * 1.02;
+    var span = Math.max(end - origin, 1), stepMs = niceStep(span / 1000, 6) * 1000;
+    var shown = items.filter(function (i) { return i.s <= end; });
+    var hidden = items.length - shown.length;
+    var rows = el('div', { class: 'rows' });
+    rows.append(axisRow(origin, span, stepMs, origin < 0 ? 'since power-on' : 'since Windows start'));
+    wf.groups.forEach(function (g) {
+      var inG = shown.filter(function (i) { return i.g === g; });
+      if (!inG.length) return;
+      rows.append(el('div', { class: 'grp' }, g));
+      inG.forEach(function (i) {
+        var left = (i.s - origin) / span * 100;
+        var track = el('div', { class: 'track grid-bg', style: 'background-size:' + (stepMs / span * 100) + '% 100%' });
+        var val;
+        if (i.o.marker || !isNum(i.e)) {
+          track.append(el('div', { class: 'mark' + (i.o.bad ? ' bad' : ''), style: 'left:' + left + '%' }));
+          val = el('div', { class: 'val' }, 'at ' + fmtShort(i.s - origin), i.o.small ? el('small', null, i.o.small) : null);
+        } else {
+          var clipped = i.e > end, width = (Math.min(i.e, end) - i.s) / span * 100;
+          track.append(el('div', { class: 'bar span ' + (i.cls || 'p-other') + (clipped ? ' clip' : ''), style: 'left:' + left + '%;width:' + Math.max(0, width) + '%' }));
+          val = el('div', { class: 'val' }, fmt(i.e - i.s), el('small', null, i.o.small || ('starts ' + fmtShort(i.s - origin))));
+        }
+        rows.append(el('div', { class: 'row', title: (i.o.title ? i.o.title + ' · ' : '') + i.name + (isNum(i.e) ? ': ' + fmt(i.e - i.s) : '') },
+          el('div', { class: 'name' + (i.o.indent ? ' indent' : '') }, i.name, i.o.status ? [' ', i.o.status] : null), track, val));
+      });
+    });
+    card.append(rows);
+    if (hidden) card.append(el('p', { class: 'note' }, hidden + ' later item' + (hidden > 1 ? 's' : '') + ' (after the desktop was ready) hidden – choose “Everything” to include them.'));
+    return card;
+  }
+
+  // ------------------------------------------------------------------ detail: cards
+  function ganttCard(b, list) {
+    var lg = b.logon || {}, all = lg.allTasks;
+    var card = el('section', { class: 'card wide' }, el('h2', null, 'Logon tasks'));
+    if (!all || !arr(lg.tasks).length) {
+      card.append(el('p', { class: 'sub' }, 'Windows runs these between sign-in and the desktop appearing.'),
+        el('p', { class: 'empty' }, 'No logon-task events for this boot (Shell-Core log had already rolled over).'));
+      return card;
+    }
+    var t0 = all.startMs, total = Math.max(all.durMs, 1);
+    var typ = typicalMap(list, function (x) { return x.logon && arr(x.logon.tasks); });
+    var items = arr(lg.tasks).slice(0, 12).sort(function (a, c) { return a.startMs - c.startMs; });
+    card.append(el('p', { class: 'sub' }, 'Longest ' + items.length + ' of the tasks in ' + fmt(all.durMs) + ' of logon processing, positioned from the start of logon. Many run in parallel.'));
+    var stepMs = niceStep(total / 1000, 4) * 1000;
+    var rows = el('div', { class: 'rows' });
+    rows.append(axisRow(0, total, stepMs));
+    items.forEach(function (t) {
+      var left = (t.startMs - t0) / total * 100, width = t.durMs / total * 100, tp = typ[t.name], slow = slowFlag(t.durMs, tp);
+      rows.append(el('div', { class: 'row', title: t.name + ': ' + fmt(t.durMs) + (isNum(tp) ? ' (typical ' + fmt(tp) + ')' : '') },
+        el('div', { class: 'name' + (slow ? ' slow' : '') }, t.name),
+        el('div', { class: 'track grid-bg', style: 'background-size:' + (stepMs / total * 100) + '% 100%' },
+          el('div', { class: 'bar span p-logonTasks', style: 'left:' + Math.max(0, left) + '%;width:' + Math.min(100 - Math.max(0, left), width) + '%' })),
+        el('div', { class: 'val' }, fmt(t.durMs), isNum(tp) ? el('small', null, slow ? '×' + Math.round(t.durMs / Math.max(tp, 1)) + ' typical (' + fmt(tp) + ')' : 'typical ' + fmt(tp)) : null)));
+    });
+    card.append(rows);
+    return card;
+  }
+
+  var GP_MODES = { 0: 'normal', 1: 'merge', 2: 'replace' };
+  function policyCard(b, list) {
+    var t = b.totals || {}, po = b.policy || {};
+    var card = el('section', { class: 'card wide' }, el('h2', null, 'Group Policy'),
+      el('p', { class: 'sub' }, 'Each policy run around this boot, with every client-side extension, the GPOs it applied, and the domain calls it made. “Blocking” is the time Winlogon actually waited (synchronous policy).'));
+    var hasWl = arr(b.winlogon).some(function (w) { return w.subscriber === 'GPClient'; });
+    card.append(el('dl', { class: 'kv' },
+      el('dt', null, 'Computer policy blocking startup'), el('dd', null, hasWl || isNum(t.machinePolicyMs) ? fmt(t.machinePolicyMs || 0) : '–'),
+      el('dt', null, 'Computer policy processing (total)'), el('dd', null, fmt(t.machinePolicyTotalMs)),
+      el('dt', null, 'User policy blocking sign-in'), el('dd', null, hasWl || isNum(t.userPolicyMs) ? fmt(t.userPolicyMs || 0) : '–'),
+      el('dt', null, 'User policy processing (total)'), el('dd', null, fmt(t.userPolicyTotalMs))));
+    var runs = arr(po.runs);
+    var typ = typicalMap(list, function (x) {
+      return x.policy && arr(x.policy.runs).reduce(function (a, r) { return a.concat(arr(r.extensions).map(function (e) { return { name: (r.scope === 'machine' ? 'C: ' : 'U: ') + e.name, durMs: e.ms }; })); }, []);
+    });
+    runs.forEach(function (r) {
+      var meta = [r.blocking ? 'synchronous' : r.async ? 'asynchronous' : r.background ? 'background' : null,
+        r.principal, r.dc && ('DC ' + r.dc.replace(/^\\\\/, '')), isNum(r.dcDiscoveryMs) && ('DC discovery ' + fmt(r.dcDiscoveryMs) + (r.dcDiscoveryFailed ? ' (failed)' : '')),
+        isNum(r.bandwidthKbps) && ((r.slowLink ? 'slow link ' : 'link ') + (r.bandwidthKbps >= 1000 ? Math.round(r.bandwidthKbps / 1000) + ' Mbps' : r.bandwidthKbps + ' kbps')),
+        isNum(r.gpoListMs) && ('GPO list ' + fmt(r.gpoListMs)), isNum(r.policyDownloadMs) && ('download ' + fmt(r.policyDownloadMs)),
+        r.loopbackMode ? 'loopback ' + (GP_MODES[r.loopbackMode] || r.loopbackMode) : null,
+        isNum(r.winlogonReturnMs) && ('returned to Winlogon after ' + fmt(r.winlogonReturnMs))].filter(Boolean);
+      var box = el('div', { class: 'run' },
+        el('div', { class: 'title' }, (r.scope === 'machine' ? 'Computer' : 'User') + ' policy · ' + r.trigger + ' · ' + fmt(r.totalMs), ' ',
+          r.errorCode ? statusEl('bad', 'error ' + hex(r.errorCode) + (r.connectivityFailure ? ' (no connectivity)' : '')) : !r.complete ? statusEl('warn', 'no completion event') : null,
+          el('span', { class: 'badge' }, 'at ' + fmtShort(r.startMs - b.bootStartMs))),
+        el('div', { class: 'meta' }, meta.join(' · ')));
+      var ext = arr(r.extensions).filter(function (e) { return isNum(e.ms); }).map(function (e) {
+        return { name: e.name, ms: e.ms, cls: r.scope === 'machine' ? 'p-machinePolicy' : 'p-userPolicy', title: e.name + (arr(e.gpos).length ? ' – GPOs: ' + arr(e.gpos).join(', ') : ''),
+          status: e.result === 'error' ? statusEl('bad', 'error ' + hex(e.errorCode)) : e.result === 'warning' ? statusEl('warn', 'warning') : null,
+          small: arr(e.gpos).length ? arr(e.gpos).length + ' GPO' + (arr(e.gpos).length > 1 ? 's' : '') + (e.changed ? ' · changed' : '') : null };
+      });
+      var withTyp = {}; ext.forEach(function (e) { var k = (r.scope === 'machine' ? 'C: ' : 'U: ') + e.name; if (isNum(typ[k])) withTyp[e.name] = typ[k]; });
+      if (ext.length) box.append(rankRows(ext, null, withTyp));
+      var lists = [];
+      if (arr(r.gpos).length) lists.push(el('li', null, el('b', null, 'Applied GPOs: '), arr(r.gpos).join(', ')));
+      if (arr(r.filteredGpos).length) lists.push(el('li', null, el('b', null, 'Filtered out: '), arr(r.filteredGpos).join(', ')));
+      arr(r.calls).slice(0, 4).forEach(function (c) { lists.push(el('li', null, el('b', null, fmt(c.ms) + ' '), c.name, c.failed ? [' ', statusEl('bad', 'failed')] : null)); });
+      arr(r.errors).forEach(function (e) { lists.push(el('li', null, statusEl('bad', 'error'), ' ', e)); });
+      if (lists.length) box.append(el('ul', { class: 'list' }, lists));
+      card.append(box);
+    });
+    var sysBad = arr(po.system).filter(function (x) { return !x.ok; });
+    if (!runs.length && arr(po.system).length) {
+      card.append(el('div', { class: 'h3' }, 'From the System log'), el('ul', { class: 'list' }, arr(po.system).map(function (x) {
+        return el('li', null, el('b', null, (x.scope === 'user' ? 'User' : 'Computer') + ' '), x.ok ? 'processed in ' + fmt(x.ms) + (isNum(x.gpos) ? ' (' + x.gpos + ' changed GPOs)' : '') : x.error);
+      })));
+    } else if (sysBad.length) {
+      card.append(el('div', { class: 'h3' }, 'Failures (System log)'), el('ul', { class: 'list' }, sysBad.map(function (x) { return el('li', null, statusEl('bad', 'failed'), ' ', x.error); })));
+    }
+    if (!runs.length && !arr(po.system).length) {
+      card.append(el('p', { class: 'empty' }, SRC['Group Policy'] && SRC['Group Policy'].status === 'denied'
+        ? (hasWl ? 'Per-extension detail needs an elevated collector run. The blocking times above come from Winlogon and are complete.' : 'Not collected: needs an elevated collector run.')
+        : 'No Group Policy processing around this boot' + (DEV.joinType && /Domain|Hybrid/.test(DEV.joinType) ? '.' : ' (this device is not domain-joined).')));
+    }
+    return card;
+  }
+
+  function mdmCard(b) {
+    var m = b.mdm;
+    var card = el('section', { class: 'card' }, el('h2', null, 'Intune policies (MDM)'),
+      el('p', { class: 'sub' }, 'Intune sync sessions and every MDM setting written around this boot. Intune applies settings in the background – they don’t block sign-in unless the Enrollment Status Page is in use.'));
+    if (!m) {
+      card.append(el('p', { class: 'empty' }, DEV.mdm === 'Intune' ? sourceMessage('Intune MDM: policies', 'No Intune sync or policy changes within ' + (DEV.windowMinutes || 15) + ' minutes of boot or sign-in.') : 'This device is not enrolled in Intune (no MDM activity).'));
+      return card;
+    }
+    var ss = arr(m.sessions);
+    card.append(el('dl', { class: 'kv' },
+      el('dt', null, 'Sync sessions'), el('dd', null, ss.length + (ss.length ? ' · ' + fmt(sumBy(ss, function (x) { return x.durMs; })) + ' total' : '')),
+      el('dt', null, 'Settings written'), el('dd', null, String(m.policyCount || 0)),
+      el('dt', null, 'Failures'), el('dd', null, String(arr(m.errors).length))));
+    if (ss.length) card.append(el('div', { class: 'h3' }, 'Sync sessions'), rankRows(ss.map(function (x) {
+      return { name: 'at ' + fmtShort(x.startMs - b.bootStartMs), ms: x.durMs || 0, status: x.ok === false ? statusEl('bad', 'failed ' + (x.result || '')) : null, title: x.server };
+    }), 'p-other'));
+    var bursts = arr(m.bursts);
+    if (bursts.length) card.append(el('div', { class: 'h3' }, 'Settings application passes'), rankRows(bursts.map(function (x) {
+      return { name: x.count + (x.count === 1 ? ' setting at ' : ' settings at ') + fmtShort(x.startMs - b.bootStartMs), ms: x.durMs, title: arr(x.areas).map(function (a) { return a.name + ' ×' + a.count; }).join(', '),
+        small: arr(x.areas).slice(0, 3).map(function (a) { return a.name; }).join(', ') };
+    }), 'p-other'));
+    var areas = arr(m.areas).slice(0, 10);
+    if (areas.length) card.append(el('div', { class: 'h3' }, 'Areas (settings written)'), rankRows(areas.map(function (a) { return { name: a.name || '(none)', ms: a.count, small: a.durMs ? 'over ' + fmt(a.durMs) : null }; }), 'p-other', null, function (v) { return String(v); }));
+    if (arr(m.errors).length) card.append(el('div', { class: 'h3' }, 'Failures'), el('ul', { class: 'list' }, arr(m.errors).slice(0, 10).map(function (e) {
+      return el('li', null, statusEl('bad', String(e.id)), ' ', e.text, e.result ? ' (' + e.result + ')' : '');
+    })));
+    return card;
+  }
+
+  function imeCard(b, list) {
+    var m = b.ime;
+    var card = el('section', { class: 'card' }, el('h2', null, 'Intune Management Extension'),
+      el('p', { class: 'sub' }, 'PowerShell scripts, remediations and Win32 apps the IME agent worked on after boot or sign-in, parsed from its logs (best effort – IME log wording is not a documented interface).'));
+    if (!m) {
+      card.append(el('p', { class: 'empty' }, sourceMessage('Intune Management Extension', 'No IME activity within ' + (DEV.windowMinutes || 15) + ' minutes of boot or sign-in.')));
+      return card;
+    }
+    if (isNum(m.firstMs)) card.append(el('dl', { class: 'kv' }, el('dt', null, 'First IME activity'), el('dd', null, fmtShort(m.firstMs - b.bootStartMs) + ' after Windows start')));
+    var typ = typicalMap(list, function (x) { return x.ime && arr(x.ime.units).map(function (u) { return { name: imeName(u), durMs: u.durMs }; }); });
+    var units = arr(m.units).slice().sort(function (a, c) { return c.durMs - a.durMs; }).slice(0, 12).map(function (u) {
+      return { name: imeName(u), ms: u.durMs, title: u.kind + ' ' + (u.id || '') + ' · ' + u.log, status: u.errors ? statusEl('bad', u.errors + ' error' + (u.errors > 1 ? 's' : '')) : null,
+        small: u.result ? 'result ' + u.result : null };
+    });
+    if (units.length) card.append(el('div', { class: 'h3' }, 'Longest work items'), rankRows(units, 'p-other', typ));
+    else card.append(el('p', { class: 'empty' }, 'Log activity found, but no recognised script or app processing.'));
+    if (arr(m.files).length) card.append(el('div', { class: 'h3' }, 'Log activity'), el('ul', { class: 'list' }, arr(m.files).map(function (f) {
+      return el('li', null, el('b', null, f.name + ' '), f.lines + ' lines over ' + fmt(f.lastMs - f.firstMs), f.errors ? [' · ', statusEl('bad', f.errors + ' errors')] : null);
+    })));
+    if (arr(m.errors).length) card.append(el('div', { class: 'h3' }, 'Errors logged'), el('ul', { class: 'list' }, arr(m.errors).slice(0, 8).map(function (e) {
+      return el('li', null, el('b', null, '×' + e.count + ' '), e.text);
+    })));
+    return card;
+  }
+
+  function winlogonCard(b, list) {
+    var ws = arr(b.winlogon).filter(function (w) { return WINLOGON_SHOWN[w.event] && w.durMs > 0; }).sort(function (a, c) { return c.durMs - a.durMs; }).slice(0, 10);
+    var typ = typicalMap(list, function (x) { return arr(x.winlogon).map(function (w) { return { name: w.subscriber + ' · ' + w.eventName, durMs: w.durMs }; }); });
+    return rankCard('What Winlogon waited for', 'Winlogon notifies each subscriber at startup and sign-in and waits for it: GPClient is synchronous Group Policy, Profiles is the profile load, the rest are Windows components or third-party add-ins.',
+      ws.map(function (w) { return { name: w.subscriber + ' · ' + w.eventName, ms: w.durMs, cls: w.subscriber === 'GPClient' ? (w.event === 0 ? 'p-machinePolicy' : 'p-userPolicy') : w.subscriber === 'Profiles' ? 'p-profile' : 'p-other' }; }),
+      'p-other', typ, arr(b.winlogon).length ? 'Every subscriber finished in under 1 ms.' : 'No Winlogon notification events for this boot (log had rolled over).');
+  }
+
+  var PERF_LABELS = {
+    OSLoaderDuration: 'OS loader', BootKernelInitTime: 'Kernel init', OtherKernelInitDuration: 'Other kernel init',
+    BootDriverInitTime: 'Driver init', BootDevicesInitTime: 'Device init', BootPNPInitDuration: 'PnP init (boot)', SystemPNPInitDuration: 'PnP init (system)',
+    BootPrefetchInitTime: 'Prefetch init', BootAutoChkTime: 'Disk check (autochk)', BootSmssInitTime: 'Session manager init',
+    Session0InitDuration: 'Session 0 init', Session1InitDuration: 'Session 1 init', SessionInitOtherDuration: 'Other session init',
+    BootCriticalServicesInitTime: 'Critical services init', BootMachineProfileProcessingTime: 'Machine profile processing',
+    BootUserProfileProcessingTime: 'User profile processing', UserProfileProcessingDuration: 'User profile processing',
+    OtherLogonInitActivityDuration: 'Other logon activity', BootExplorerInitTime: 'Explorer init', ExplorerInitDuration: 'Explorer init',
+    UserLogonWaitDuration: 'Waiting at sign-in screen'
+  };
+  var PERF_SKIP = { BootTime: 1, MainPathBootTime: 1, BootPostBootTime: 1, BootTsVersion: 1, SystemBootInstance: 1, UserBootInstance: 1, BootPrefetchBytes: 1, BootNumStartupApps: 1 };
+
+  function perfCard(b) {
+    var card = el('section', { class: 'card' }, el('h2', null, 'Windows boot trace'),
+      el('p', { class: 'sub' }, 'Windows’ own boot measurement (Diagnostics-Performance event 100): kernel, drivers, services and shell initialisation.'));
+    var p = b.perf;
+    if (!p) { card.append(el('p', { class: 'empty' }, sourceMessage('Diagnostics-Performance', 'No boot-trace event for this boot (Windows writes it a few minutes after boot, and only for full boots).'))); return card; }
+    var f = p.fields || {}, flags = p.flags || {};
+    card.append(el('dl', { class: 'kv' },
+      el('dt', null, 'Boot time (main path + post-boot)'), el('dd', null, fmt(p.bootTimeMs)),
+      el('dt', null, 'Main path (to desktop)'), el('dd', null, fmt(p.mainPathMs)),
+      el('dt', null, 'Post-boot (system settling)'), el('dd', null, fmt(p.postBootMs)),
+      el('dt', null, 'Waiting at sign-in screen'), el('dd', null, fmt(p.logonWaitMs)),
+      isNum(f.BootNumStartupApps) ? [el('dt', null, 'Startup apps'), el('dd', null, String(f.BootNumStartupApps))] : null,
+      isNum(f.BootPrefetchBytes) ? [el('dt', null, 'Prefetched'), el('dd', null, Math.round(f.BootPrefetchBytes / 1048576) + ' MB')] : null,
+      flags.BootIsRebootAfterInstall ? [el('dt', null, 'Reboot after install'), el('dd', null, 'yes')] : null,
+      flags.BootIsDegradation ? [el('dt', null, 'Windows rated it'), el('dd', null, statusEl('warn', 'degraded'), ' +' + fmt(f.BootDegradationDelta))] : null));
+    var items = Object.keys(f).filter(function (k) { return /(Time|Duration)$/.test(k) && !PERF_SKIP[k] && !/Start/.test(k) && f[k] > 0; })
+      .map(function (k) { return { name: PERF_LABELS[k] || k, ms: f[k], title: k }; })
+      .sort(function (a, c) { return c.ms - a.ms; }).slice(0, 14);
+    if (items.length) card.append(el('div', { class: 'h3' }, 'Components (can overlap)'), rankRows(items, 'p-boot', null));
+    return card;
+  }
+
+  function degraderItems(ds) {
+    return arr(ds).map(function (d) {
+      return { name: d.kind + ': ' + d.name, ms: isNum(d.degradationMs) ? d.degradationMs : (d.totalMs || 0),
+        title: d.name + (d.path ? ' (' + d.path + ')' : '') + (d.company ? ' – ' + d.company : '') + ' – total ' + fmt(d.totalMs) + ', degradation ' + fmt(d.degradationMs),
+        small: 'of ' + fmt(d.totalMs) + ' total' };
+    }).slice(0, 10);
+  }
+  function degradersCard(b) {
+    return rankCard('What slowed this boot', 'Apps, drivers, services, devices and policy Windows flagged as slower than their own baseline (events 101–110). Bars show the extra time.',
+      degraderItems(b.degraders), 'p-boot', null, sourceMessage('Diagnostics-Performance', 'Nothing was flagged as degrading this boot.'));
+  }
+
+  function shutdownCard(b) {
+    var card = el('section', { class: 'card' }, el('h2', null, 'How this boot ended'),
+      el('p', { class: 'sub' }, 'What requested the shutdown or restart, and how long shutting down took.'));
+    var r = b.shutdownReason, sp = b.shutdownPerf, kv = [];
+    if (b.shutdownMs) kv.push(el('dt', null, 'Up for'), el('dd', null, fmt(b.shutdownMs - b.bootStartMs)));
+    if (r) {
+      kv.push(el('dt', null, 'Requested by'), el('dd', null, (r.process || '').split('\\').pop() || '–'));
+      kv.push(el('dt', null, 'Type'), el('dd', null, r.type || '–'));
+      kv.push(el('dt', null, 'Reason'), el('dd', null, (r.reason || '–') + (r.comment ? ' – ' + r.comment : '')));
+      if (r.user) kv.push(el('dt', null, 'User'), el('dd', null, r.user));
+    }
+    if (sp) {
+      kv.push(el('dt', null, 'Shutdown took'), el('dd', null, fmt(sp.totalMs)));
+    }
+    if (kv.length) card.append(el('dl', { class: 'kv' }, kv));
+    if (sp && sp.fields) {
+      var f = sp.fields, names = { ShutdownUserSessionTime: 'User session', ShutdownUserPolicyTime: 'User policy', ShutdownUserProfilesTime: 'User profiles',
+        ShutdownSystemSessionsTime: 'System sessions', ShutdownPreShutdownNotificationsTime: 'Pre-shutdown notifications', ShutdownServicesTime: 'Services', ShutdownKernelTime: 'Kernel' };
+      var items = Object.keys(names).filter(function (k) { return f[k] > 0; }).map(function (k) { return { name: names[k], ms: f[k] }; }).sort(function (a, c) { return c.ms - a.ms; });
+      if (items.length) card.append(el('div', { class: 'h3' }, 'Shutdown components'), rankRows(items, 'p-other'));
+      var dg = degraderItems(sp.degraders);
+      if (dg.length) card.append(el('div', { class: 'h3' }, 'What slowed shutdown'), rankRows(dg, 'p-other'));
+    }
+    var wl = arr(b.winlogon).filter(function (w) { return !WINLOGON_SHOWN[w.event] && w.durMs >= 5; }).sort(function (a, c) { return c.durMs - a.durMs; }).slice(0, 5);
+    if (wl.length) card.append(el('div', { class: 'h3' }, 'Winlogon at sign-out / shutdown'), rankRows(wl.map(function (w) { return { name: w.subscriber + ' · ' + w.eventName, ms: w.durMs }; }), 'p-other'));
+    if (!kv.length && !wl.length) card.append(el('p', { class: 'empty' }, b.shutdownMs ? 'No shutdown request recorded.' : 'Still running, or ended without a clean shutdown.'));
+    return card;
+  }
+
+  function issuesCard(b) {
+    var card = el('section', { class: 'card' }, el('h2', null, 'Problems around this boot'),
+      el('p', { class: 'sub' }, 'Services that failed or timed out, drivers that did not load, unexpected shutdowns and Entra ID token errors – within ' + (DEV.windowMinutes || 15) + ' minutes of boot or sign-in.'));
+    var xs = arr(b.issues);
+    var fw = b.firmware || {};
+    var li = [];
+    if (fw.lastShutdownGood === false) li.push(el('li', null, statusEl('bad', 'Power'), ' The previous shutdown was not clean.'));
+    xs.forEach(function (x) { li.push(el('li', null, statusEl('bad', x.source + ' ' + x.id), ' ', el('b', null, '+' + fmtShort(x.t - b.bootStartMs) + ' '), x.text)); });
+    card.append(li.length ? el('ul', { class: 'list' }, li) : el('p', { class: 'empty' }, 'None recorded.'));
+    return card;
+  }
+
+  function renderDetail(list) {
+    var host = $('detail'); host.replaceChildren();
+    var b = boots.filter(function (x) { return x.id === state.selected; })[0];
+    if (!b) { host.append(el('h2', { id: 'detail-h' }, 'Boot detail'), el('p', { class: 'empty' }, 'Select a boot to see its breakdown.')); return; }
+    var t = b.totals || {}, lg = b.logon || {};
+    host.append(el('div', { class: 'detailhead' },
+      el('h2', { id: 'detail-h' }, dateLong(b.bootStartMs), el('span', { class: 'badge' }, bootTypeName(b.bootType)),
+        b.firmware && b.firmware.lastShutdownGood === false ? el('span', { class: 'badge' }, 'after an unclean shutdown') : null),
+      el('div', { class: 'sub', style: 'margin:0' }, b.shutdownMs ? 'Up for ' + fmt(b.shutdownMs - b.bootStartMs) : 'Still running, or shut down uncleanly')));
+    var facts = [];
+    if (lg.user && lg.user.name) facts.push(el('span', null, 'Signed in: ', el('b', null, lg.user.name), lg.user.profileType && lg.user.profileType !== 'Regular' ? ' (' + lg.user.profileType + ' profile)' : ''));
+    if (isNum(t.powerOnToReadyMs)) facts.push(el('span', null, 'Power-on → ready: ', el('b', null, fmt(t.powerOnToReadyMs))));
+    if (isNum(t.coreBootMs)) facts.push(el('span', null, 'To sign-in screen: ', el('b', null, fmt(t.coreBootMs))));
+    if (isNum(t.signInWaitMs)) facts.push(el('span', null, 'Screen waited: ', el('b', null, fmt(t.signInWaitMs))));
+    if (isNum(t.signInToReadyMs)) facts.push(el('span', null, 'Sign-in → ready: ', el('b', null, fmt(t.signInToReadyMs))));
+    if (isNum(t.networkMs)) facts.push(el('span', null, 'Network at: ', el('b', null, '+' + fmtShort(t.networkMs))));
+    if (b.shutdownReason && b.shutdownReason.process) facts.push(el('span', null, 'Ended by: ', el('b', null, b.shutdownReason.process.split('\\').pop()), b.shutdownReason.type ? ' (' + b.shutdownReason.type + ')' : ''));
+    if (facts.length) host.append(el('div', { class: 'facts' }, facts));
+
+    // proportional strip with direct labels only where they fit
+    var phases = (b.phases || []).filter(function (p) { return p.durMs > 0; });
+    if (phases.length) {
+      var totalMs = phases.reduce(function (s, p) { return s + p.durMs; }, 0);
+      var stripW = Math.max(320, host.clientWidth - 32);
+      var strip = el('div', { class: 'strip', role: 'img', 'aria-label': phases.map(function (p) { return label(p.key) + ' ' + fmt(p.durMs); }).join(', ') });
+      phases.forEach(function (p) {
+        var w = p.durMs / totalMs * stripW, text = label(p.key) + ' ' + fmtShort(p.durMs);
+        var fits = w >= textW(text) + 16;
+        var seg = el('div', { class: 'p-' + p.key, style: 'width:' + (p.durMs / totalMs * 100) + '%', title: label(p.key) + ': ' + fmt(p.durMs) });
+        // white text on the deep red / blue / green fills; dark ink on the lighter hues; theme ink on the neutral fills
+        var ink = (p.key === 'boot' || p.key === 'logonTasks' || p.key === 'firmware') ? '#fff' : (p.key === 'other' || p.key === 'signInWait') ? 'var(--ink)' : '#0b0b0b';
+        if (fits) seg.append(el('span', { style: 'color:' + ink }, text));
+        strip.append(seg);
+      });
+      host.append(strip, el('div', { class: 'note' }, 'All phases of this boot, including the sign-in screen wait (hatched). Segment labels appear only where they fit; hover for any segment.'));
+    } else {
+      host.append(el('p', { class: 'empty' }, 'No timeline for this boot – the logon event logs had already rolled over before it was collected.'));
+    }
+
+    var appTyp = typicalMap(list, function (x) { return x.logon && arr(x.logon.startupApps).map(function (a) { return { name: a.name, durMs: a.durMs }; }); });
+    var apps = arr(lg.startupApps).map(function (a) { return { name: a.name, ms: a.durMs, title: a.command, small: a.kind === 'packaged' ? 'packaged app' : null }; }).slice(0, 12);
+    var batches = arr(lg.startupBatches).filter(function (x) { return x.durMs > 0; });
+    var appsCard = rankCard('Startup apps', 'Time Windows spent launching each Run-key command and packaged startup task' + (batches.length ? ' (' + batches.length + ' Run key' + (batches.length > 1 ? 's' : '') + ', ' + fmt(sumBy(batches, function (x) { return x.durMs; })) + ' total)' : '') + '.', apps, 'p-logonTasks', appTyp, 'No startup-app events for this boot.');
+    var sp = arr(lg.shellPhases).filter(function (p) { return p.durMs > 0; }).map(function (p) { return { name: p.name, ms: p.durMs }; }).sort(function (a, c) { return c.ms - a.ms; }).slice(0, 8);
+    var spTyp = typicalMap(list, function (x) { return x.logon && arr(x.logon.shellPhases); });
+    var spCard = rankCard('Shell phases', 'Explorer and desktop initialisation. Long background phases (such as startup apps) don’t necessarily block the desktop.', sp, 'p-logonTasks', spTyp, 'No shell-phase events for this boot.');
+
+    host.append(el('div', { class: 'grid cards' }, waterfallCard(b), policyCard(b, list), mdmCard(b), imeCard(b, list), winlogonCard(b, list),
+      ganttCard(b, list), appsCard, spCard, perfCard(b), degradersCard(b), shutdownCard(b), issuesCard(b)));
+  }
+
+  // ------------------------------------------------------------------ typical times across boots
+  var TYP = {
+    phases: ['Boot phases', function (b) { return PHASES.map(function (p) { return { name: p.label, ms: phaseMs(b, p.key) || null }; }); }],
+    gp: ['Group Policy extensions', function (b) { return arr(b.policy && b.policy.runs).reduce(function (a, r) { return a.concat(arr(r.extensions).map(function (e) { return { name: (r.scope === 'machine' ? 'Computer · ' : 'User · ') + e.name, ms: e.ms }; })); }, []); }],
+    winlogon: ['Winlogon subscribers', function (b) { return arr(b.winlogon).filter(function (w) { return WINLOGON_SHOWN[w.event]; }).map(function (w) { return { name: w.subscriber + ' · ' + w.eventName, ms: w.durMs }; }); }],
+    tasks: ['Logon tasks', function (b) { return arr(b.logon && b.logon.tasks).map(function (t) { return { name: t.name, ms: t.durMs }; }); }],
+    apps: ['Startup apps', function (b) { return arr(b.logon && b.logon.startupApps).map(function (t) { return { name: t.name, ms: t.durMs }; }); }],
+    ime: ['Intune scripts and apps', function (b) { return arr(b.ime && b.ime.units).map(function (u) { return { name: imeName(u), ms: u.durMs }; }); }],
+    mdm: ['Intune MDM syncs', function (b) { return arr(b.mdm && b.mdm.sessions).map(function (s) { return { name: 'MDM sync session', ms: s.durMs }; }); }],
+    degraders: ['Boot degraders', function (b) { return arr(b.degraders).map(function (d) { return { name: d.kind + ': ' + d.name, ms: d.degradationMs }; }); }]
+  };
+  function renderTypical(list) {
+    var host = $('typical'); host.replaceChildren();
+    var sel = el('select', { id: 'typ-sel', 'aria-label': 'Category' });
+    Object.keys(TYP).forEach(function (k) { sel.append(el('option', { value: k }, TYP[k][0])); });
+    sel.value = state.typ;
+    sel.onchange = function () { state.typ = sel.value; renderTypical(visible()); };
+    host.append(el('div', { class: 'cardhead' },
+      el('div', null, el('h2', { id: 'typ-h' }, 'Typical times across boots'), el('p', { class: 'sub' }, 'Median, 90th percentile and worst case for each item over the ' + list.length + ' boots in view – the per-item breakdown Intune’s totals don’t show.')),
+      el('div', { class: 'ctl' }, el('label', { for: 'typ-sel' }, 'Show'), sel)));
+    var acc = {};
+    list.forEach(function (b) {
+      var seen = {};
+      TYP[state.typ][1](b).forEach(function (i) {
+        if (!isNum(i.ms)) return;
+        var a = acc[i.name] = acc[i.name] || { v: [], boots: 0, worst: null };
+        a.v.push(i.ms);
+        if (!seen[i.name]) { a.boots++; seen[i.name] = 1; }
+        if (!a.worst || i.ms > a.worst.ms) a.worst = { ms: i.ms, b: b };
+      });
+    });
+    var rowsData = Object.keys(acc).map(function (k) { var a = acc[k]; return { name: k, boots: a.boots, med: median(a.v), p90: pct(a.v, 0.9), worst: a.worst }; })
+      .sort(function (a, c) { return (c.p90 || 0) - (a.p90 || 0); }).slice(0, 40);
+    if (!rowsData.length) { host.append(el('p', { class: 'empty' }, 'No data of this kind in the boots in view.')); return; }
+    var table = el('table', null, el('thead', null, el('tr', null, ['Item', 'Boots', 'Median', 'P90', 'Worst', 'Worst boot'].map(function (h, i) { return el('th', { scope: 'col', style: i === 1 ? 'text-align:right' : null }, h); }))));
+    var body = el('tbody');
+    rowsData.forEach(function (r) {
+      body.append(el('tr', null, el('td', { class: 'l' }, r.name), el('td', null, String(r.boots)), el('td', null, fmt(r.med)), el('td', null, fmt(r.p90)), el('td', null, fmt(r.worst.ms)),
+        el('td', null, el('button', { class: 'link', type: 'button', onclick: function () { state.selected = r.worst.b.id; update(); $('detail').scrollIntoView({ behavior: 'smooth' }); } }, dateLong(r.worst.b.bootStartMs)))));
+    });
+    table.append(body);
+    host.append(el('div', { class: 'tablewrap' }, table));
+  }
+
+  // ------------------------------------------------------------------ table
+  var COLS = [['Boot', function (b) { return dateLong(b.bootStartMs); }, function (b) { return new Date(b.bootStartMs).toISOString(); }],
+    ['Type', function (b) { return bootTypeName(b.bootType); }],
+    ['Firmware + loader', 't', function (t) { return isNum(t.firmwareMs) ? t.firmwareMs + (t.loaderMs || 0) : null; }],
+    ['Start → sign-in screen', 't', 'coreBootMs'], ['Sign-in wait', 't', 'signInWaitMs'],
+    ['Auth', 't', 'authMs'], ['Profile', 't', 'profileMs'],
+    ['Computer policy (blocking)', 't', 'machinePolicyMs'], ['Computer policy (total)', 't', 'machinePolicyTotalMs'],
+    ['User policy (blocking)', 't', 'userPolicyMs'], ['User policy (total)', 't', 'userPolicyTotalMs'],
+    ['Logon tasks', 't', 'logonTasksMs'], ['Sign-in → ready', 't', 'signInToReadyMs'],
+    ['Ready (excl. wait)', 't', 'readyExclWaitMs'], ['Power-on → ready', 't', 'powerOnToReadyMs'],
+    ['Network', 't', 'networkMs'], ['MDM settings', 'n', 'mdmPolicies'], ['Problems', 'c']];
+  function colValue(c, b) {
+    var t = b.totals || {};
+    if (c[1] === 't') return typeof c[2] === 'function' ? c[2](t) : t[c[2]];
+    if (c[1] === 'n') return t[c[2]];
+    if (c[1] === 'c') return arr(b.issues).length;
+    return null;
+  }
+  function renderTable(list) {
+    var table = $('table'); table.replaceChildren();
+    table.append(el('thead', null, el('tr', null, COLS.map(function (c) { return el('th', { scope: 'col' }, c[0]); }))));
+    var body = el('tbody');
+    list.slice().reverse().forEach(function (b) {
+      var tr = el('tr', { class: b.id === state.selected ? 'sel' : '', tabindex: 0, onclick: function () { state.selected = b.id; update(); },
+        onkeydown: function (e) { if (e.key === 'Enter') { state.selected = b.id; update(); } } },
+        COLS.map(function (c) {
+          if (typeof c[1] === 'function') return el('td', null, c[1](b));
+          var v = colValue(c, b);
+          return el('td', null, c[1] === 't' ? fmt(v) : (v == null ? '–' : String(v)));
+        }));
+      body.append(tr);
+    });
+    table.append(body);
+  }
+  function downloadCsv() {
+    var list = visible();
+    var q = function (s) {
+      s = s == null ? '' : String(s);
+      if (/^[=+@]/.test(s)) s = "'" + s;                 // never let a cell start a spreadsheet formula
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
+    var devCols = [['Device', DEV.name], ['Serial', DEV.serial], ['Entra device ID', DEV.entraDeviceId], ['Intune device ID', DEV.intuneDeviceId],
+      ['Collected', DATA.collectedMs ? new Date(DATA.collectedMs).toISOString() : null]];
+    var devHead = devCols.map(function (c) { return q(c[0]); }), devVals = devCols.map(function (c) { return q(c[1]); });
+    var lines = [devHead.concat(COLS.map(function (c) { return q(c[1] === 't' ? c[0] + ' (ms)' : c[0]); })).join(',')];
+    list.forEach(function (b) {
+      lines.push(devVals.concat(COLS.map(function (c) {
+        if (typeof c[1] === 'function') return q(c[2] ? c[2](b) : c[1](b));
+        var v = colValue(c, b); return q(isNum(v) ? Math.round(v) : v);
+      })).join(','));
+    });
+    var a = el('a', { href: URL.createObjectURL(new Blob([lines.join('\r\n')], { type: 'text/csv' })), download: 'bootview-' + (DEV.name || 'device') + '.csv' });
+    document.body.append(a); a.click(); a.remove();
+  }
+  $('csv').addEventListener('click', downloadCsv);
+
+  // ------------------------------------------------------------------ update
+  function update() {
+    var list = visible();
+    var inView = list.some(function (b) { return b.id === state.selected; });
+    if (!inView) {                                        // default to the newest boot that has timing data
+      var pool = charted(list).length ? charted(list) : list;
+      state.selected = pool.length ? pool[pool.length - 1].id : null;
+    }
+    renderFilters();
+    renderLegend();
+    renderKpis(list);
+    drawChart(list);
+    renderDetail(list);
+    renderTypical(list);
+    renderTable(list);
+  }
+
+  // ------------------------------------------------------------------ theme
+  var themeBtn = $('theme');
+  var modes = ['auto', 'light', 'dark'];
+  function applyTheme(mode) {
+    if (mode === 'auto') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', mode);
+    themeBtn.textContent = 'Theme: ' + mode; themeBtn.dataset.mode = mode;
+  }
+  var saved = 'auto';
+  try { saved = localStorage.getItem('bootview-theme') || 'auto'; } catch (e) { }
+  applyTheme(modes.indexOf(saved) >= 0 ? saved : 'auto');
+  themeBtn.addEventListener('click', function () {
+    var next = modes[(modes.indexOf(themeBtn.dataset.mode) + 1) % modes.length];
+    applyTheme(next);
+    try { localStorage.setItem('bootview-theme', next); } catch (e) { }
+  });
+
+  // redraw the width-dependent parts (SVG chart, strip labels) whenever the container width actually changes
+  var lastWidth = 0, resizeTimer;
+  function onWidthChange() {
+    var w = $('chart').clientWidth;
+    if (Math.abs(w - lastWidth) < 2) return;
+    lastWidth = w;
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function () { var l = visible(); drawChart(l); renderDetail(l); }, 80);
+  }
+  if (window.ResizeObserver) new ResizeObserver(onWidthChange).observe($('chart'));
+  else window.addEventListener('resize', onWidthChange);
+
+  renderHeader();
+  renderNotices();
+  update();
+})();
+</script>
+</body>
+</html>
