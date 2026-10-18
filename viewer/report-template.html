@@ -262,7 +262,9 @@
   var boots = DATA.boots.slice().sort(function (a, b) { return a.bootStartMs - b.bootStartMs; });
   var latestMs = boots.length ? boots[boots.length - 1].bootStartMs : 0;
   var hasFirmware = boots.some(function (b) { return b.totals && isNum(b.totals.firmwareMs); });
-  var state = { range: 30, type: 'all', view: hasFirmware ? 'power' : 'boot', wait: false, selected: null, wf: 'ready', typ: 'phases' };
+  var readyBoots = boots.filter(function (b) { return b.totals && isNum(b.totals.readyMs); });
+  var fwShare = readyBoots.length ? readyBoots.filter(function (b) { return isNum(b.totals.firmwareMs); }).length / readyBoots.length : 0;
+  var state = { range: 30, type: 'all', view: hasFirmware && fwShare >= 0.5 ? 'power' : 'boot', wait: false, selected: null, wf: 'ready', typ: 'phases' };
 
   // ------------------------------------------------------------------ helpers
   function el(tag, props) {
@@ -319,6 +321,8 @@
   function label(key) { var p = PHASES.filter(function (x) { return x.key === key; })[0]; return p ? p.label : key; }
   function hex(n) { return isNum(n) ? '0x' + (n >>> 0).toString(16).toUpperCase() : n; }
   function sumBy(a, f) { return a.reduce(function (s, x) { var v = f(x); return s + (isNum(v) ? v : 0); }, 0); }
+  function dict() { return Object.create(null); }          // keyed by names from the data: "constructor" or "__proto__" must be plain keys
+  function own(o, k) { return Object.prototype.hasOwnProperty.call(o, k) ? o[k] : undefined; }
 
   var measureCtx = document.createElement('canvas').getContext('2d');
   function textW(str, font) { measureCtx.font = font || '600 11.5px system-ui, "Segoe UI", sans-serif'; return measureCtx.measureText(str).width; }
@@ -332,8 +336,17 @@
       return true;
     });
   }
-  // only boots whose logon completed (AllLogonTasks finished) are charted, so chart and KPI tiles describe the same set
-  function charted(list) { return list.filter(function (b) { return (b.phases || []).length && b.totals && isNum(b.totals.readyMs); }); }
+  // Only boots measured for the whole of the current view are charted, so chart, KPI tiles and "slowest" describe the
+  // same set and a missing measurement never counts as 0: the desktop must have been ready (AllLogonTasks finished);
+  // the power-on view needs firmware timing; excluding the sign-in wait needs the wait to be known.
+  function whyNotCharted(b) {
+    var t = b.totals;
+    if (!(b.phases || []).length || !t || !isNum(t.readyMs)) return 'logon';
+    if (state.view === 'power' && !isNum(t.firmwareMs)) return 'firmware';
+    if (state.view !== 'logon' && !state.wait && !isNum(t.readyExclWaitMs)) return 'wait';
+    return null;
+  }
+  function charted(list) { return list.filter(function (b) { return !whyNotCharted(b); }); }
   function includedPhases() {
     return PHASES.filter(function (p) {
       if (p.key === 'signInWait' && !(state.wait && state.view !== 'logon')) return false;
@@ -389,7 +402,7 @@
     segButtons($('f-view'), views, state.view, function (v) { state.view = v; update(); });
     segButtons($('f-wait'), [[false, 'Exclude'], [true, 'Include']], state.wait, function (v) { state.wait = v; update(); });
     var sel = $('f-type'); sel.replaceChildren();
-    var present = {}; boots.forEach(function (b) { present[b.bootType == null ? 'unk' : b.bootType] = 1; });
+    var present = dict(); boots.forEach(function (b) { present[b.bootType == null ? 'unk' : b.bootType] = 1; });
     sel.append(el('option', { value: 'all' }, 'All boot types'));
     Object.keys(BOOT_TYPES).forEach(function (t) { if (present[t]) sel.append(el('option', { value: t }, BOOT_TYPES[t] + 's')); });
     sel.value = state.type;
@@ -409,19 +422,19 @@
     host.append(el('div', { class: 'card tile hero' },
       el('div', { class: 'label' }, 'Median ' + VIEWS[state.view].label + (state.view !== 'logon' ? (state.wait ? ' (incl. sign-in wait)' : ' (excl. sign-in wait)') : '')),
       el('div', { class: 'value' }, fmtShort(median(totals))),
-      el('div', { class: 'meta' }, totals.length ? 'P90 ' + fmtShort(pct(totals, 0.9)) + ' · ' + totals.length + ' boots with full logon data' : 'No boots with complete logon data in this range')));
+      el('div', { class: 'meta' }, totals.length ? 'P90 ' + fmtShort(pct(totals, 0.9)) + ' · ' + totals.length + ' of ' + list.length + ' boots measured for this view' : 'No boots in this range are measured for this view')));
     host.append(el('div', { class: 'card tile' },
       el('div', { class: 'label' }, 'Median firmware + loader'),
       el('div', { class: 'value' }, fmtShort(median(fwl))),
-      el('div', { class: 'meta' }, fwl.length ? 'Before Windows starts · P90 ' + fmtShort(pct(fwl, 0.9)) : 'No firmware timing recorded')));
+      el('div', { class: 'meta' }, fwl.length ? 'Before Windows starts · P90 ' + fmtShort(pct(fwl, 0.9)) + ' · ' + fwl.length + ' of ' + list.length + ' boots' : 'No firmware timing recorded')));
     host.append(el('div', { class: 'card tile' },
       el('div', { class: 'label' }, 'Median Windows start → sign-in screen'),
       el('div', { class: 'value' }, fmtShort(median(core))),
-      el('div', { class: 'meta' }, 'P90 ' + fmtShort(pct(core, 0.9)))));
+      el('div', { class: 'meta' }, 'P90 ' + fmtShort(pct(core, 0.9)) + ' · ' + core.length + ' of ' + list.length + ' boots')));
     host.append(el('div', { class: 'card tile' },
       el('div', { class: 'label' }, 'Median sign-in → ready'),
       el('div', { class: 'value' }, fmtShort(median(after))),
-      el('div', { class: 'meta' }, 'P90 ' + fmtShort(pct(after, 0.9)))));
+      el('div', { class: 'meta' }, 'P90 ' + fmtShort(pct(after, 0.9)) + ' · ' + after.length + ' of ' + list.length + ' boots')));
     host.append(el('div', { class: 'card tile' },
       el('div', { class: 'label' }, 'Slowest boot (' + VIEWS[state.view].label + ')'),
       el('div', { class: 'value' }, slowest ? fmtShort(slowest.r) : '–'),
@@ -438,11 +451,13 @@
   function drawChart(list) {
     var host = $('chart'); host.replaceChildren();
     var data = charted(list);
-    var skipped = list.length - data.length;
-    var noFw = state.view === 'power' ? data.filter(function (b) { return !isNum(b.totals.firmwareMs); }).length : 0;
+    var why = { logon: 0, firmware: 0, wait: 0 };
+    list.forEach(function (b) { var r = whyNotCharted(b); if (r) why[r]++; });
+    function omitted(n, what) { return n ? ' · ' + n + ' boot' + (n > 1 ? 's' : '') + ' ' + what + ' omitted' : ''; }
     $('chart-sub').textContent = VIEWS[state.view].sub + ', one column per boot' +
-      (skipped ? ' · ' + skipped + ' boot' + (skipped > 1 ? 's' : '') + ' without complete logon data omitted (event logs had already rolled over)' : '') +
-      (noFw ? ' · ' + noFw + ' older boot' + (noFw > 1 ? 's have' : ' has') + ' no firmware timing' : '') + '.';
+      omitted(why.logon, 'without complete logon data (event logs had already rolled over)') +
+      omitted(why.firmware, 'without firmware timing') +
+      omitted(why.wait, 'whose sign-in screen wait is unknown (include the wait to show them)') + '.';
     if (!data.length) { host.append(el('p', { class: 'empty' }, 'No boots with timing data in this range.')); return; }
 
     var W = Math.max(320, host.clientWidth), H = 300, m = { l: 46, r: 8, t: 22, b: 34 };
@@ -538,15 +553,19 @@
   }
 
   // ------------------------------------------------------------------ detail: shared pieces
+  // "Typical" duration of an item: each boot counts once (an item that runs several times in one boot contributes the
+  // median of its runs there), and an item needs at least 3 boots - not 3 runs - before it gets a typical value.
   function typicalMap(list, getter) {
-    var acc = {}, withData = 0;
+    var acc = dict(), withData = 0;
     list.forEach(function (b) {
       var items = getter(b);
       if (!items || !items.length) return;
       withData++;
-      items.forEach(function (t) { if (isNum(t.durMs)) (acc[t.name] = acc[t.name] || []).push(t.durMs); });
+      var inBoot = dict();
+      items.forEach(function (t) { if (isNum(t.durMs)) (inBoot[t.name] = inBoot[t.name] || []).push(t.durMs); });
+      Object.keys(inBoot).forEach(function (k) { (acc[k] = acc[k] || []).push(median(inBoot[k])); });
     });
-    var out = {};
+    var out = dict();
     Object.keys(acc).forEach(function (k) { if (acc[k].length >= Math.max(3, withData * 0.4)) out[k] = median(acc[k]); });
     return out;
   }
@@ -766,7 +785,7 @@
           status: e.result === 'error' ? statusEl('bad', 'error ' + hex(e.errorCode)) : e.result === 'warning' ? statusEl('warn', 'warning') : null,
           small: arr(e.gpos).length ? arr(e.gpos).length + ' GPO' + (arr(e.gpos).length > 1 ? 's' : '') + (e.changed ? ' · changed' : '') : null };
       });
-      var withTyp = {}; ext.forEach(function (e) { var k = (r.scope === 'machine' ? 'C: ' : 'U: ') + e.name; if (isNum(typ[k])) withTyp[e.name] = typ[k]; });
+      var withTyp = dict(); ext.forEach(function (e) { var k = (r.scope === 'machine' ? 'C: ' : 'U: ') + e.name; if (isNum(typ[k])) withTyp[e.name] = typ[k]; });
       if (ext.length) box.append(rankRows(ext, null, withTyp));
       var lists = [];
       if (arr(r.gpos).length) lists.push(el('li', null, el('b', null, 'Applied GPOs: '), arr(r.gpos).join(', ')));
@@ -818,6 +837,17 @@
     if (arr(m.errors).length) card.append(el('div', { class: 'h3' }, 'Failures'), el('ul', { class: 'list' }, arr(m.errors).slice(0, 10).map(function (e) {
       return el('li', null, statusEl('bad', String(e.id)), ' ', e.text, e.result ? ' (' + e.result + ')' : '');
     })));
+    var pols = arr(m.policies).filter(Boolean);
+    if (pols.length) {
+      var total = Math.max(m.policyCount || 0, pols.length);
+      card.append(el('div', { class: 'h3' }, 'Settings' + (total > pols.length ? ' (first ' + pols.length + ' of ' + total + ' stored)' : '')),
+        el('div', { class: 'tablewrap', style: 'max-height:260px' }, el('table', null,
+          el('thead', null, el('tr', null, ['At', 'Change', 'Scope', 'Area', 'Setting', 'Value'].map(function (h) { return el('th', { scope: 'col', style: 'text-align:left' }, h); }))),
+          el('tbody', null, pols.map(function (x) {
+            return el('tr', null, el('td', { class: 'l' }, isNum(x.t) ? '+' + fmtShort(x.t - b.bootStartMs) : '–'), el('td', { class: 'l' }, x.op || '–'), el('td', { class: 'l' }, x.scope || '–'),
+              el('td', { class: 'l' }, x.area || '–'), el('td', { class: 'l' }, x.policy || '–'), el('td', { class: 'l' }, x.value == null || x.value === '' ? '–' : String(x.value)));
+          })))));
+    }
     return card;
   }
 
@@ -881,8 +911,8 @@
       isNum(f.BootPrefetchBytes) ? [el('dt', null, 'Prefetched'), el('dd', null, Math.round(f.BootPrefetchBytes / 1048576) + ' MB')] : null,
       flags.BootIsRebootAfterInstall ? [el('dt', null, 'Reboot after install'), el('dd', null, 'yes')] : null,
       flags.BootIsDegradation ? [el('dt', null, 'Windows rated it'), el('dd', null, statusEl('warn', 'degraded'), ' +' + fmt(f.BootDegradationDelta))] : null));
-    var items = Object.keys(f).filter(function (k) { return /(Time|Duration)$/.test(k) && !PERF_SKIP[k] && !/Start/.test(k) && f[k] > 0; })
-      .map(function (k) { return { name: PERF_LABELS[k] || k, ms: f[k], title: k }; })
+    var items = Object.keys(f).filter(function (k) { return /(Time|Duration)$/.test(k) && !own(PERF_SKIP, k) && !/Start/.test(k) && f[k] > 0; })
+      .map(function (k) { return { name: own(PERF_LABELS, k) || k, ms: f[k], title: k }; })
       .sort(function (a, c) { return c.ms - a.ms; }).slice(0, 14);
     if (items.length) card.append(el('div', { class: 'h3' }, 'Components (can overlap)'), rankRows(items, 'p-boot', null));
     return card;
@@ -1010,26 +1040,29 @@
     sel.value = state.typ;
     sel.onchange = function () { state.typ = sel.value; renderTypical(visible()); };
     host.append(el('div', { class: 'cardhead' },
-      el('div', null, el('h2', { id: 'typ-h' }, 'Typical times across boots'), el('p', { class: 'sub' }, 'Median, 90th percentile and worst case for each item over the ' + list.length + ' boots in view – the per-item breakdown Intune’s totals don’t show.')),
+      el('div', null, el('h2', { id: 'typ-h' }, 'Typical times across boots'), el('p', { class: 'sub' }, 'Median, 90th percentile and worst case for each item over the ' + list.length + ' boots in view – the per-item breakdown Intune’s totals don’t show. Each boot counts once: when an item ran more than once in a boot, its runs are added up (“Runs” counts them).')),
       el('div', { class: 'ctl' }, el('label', { for: 'typ-sel' }, 'Show'), sel)));
-    var acc = {};
+    var acc = dict();
     list.forEach(function (b) {
-      var seen = {};
+      var inBoot = dict();
       TYP[state.typ][1](b).forEach(function (i) {
         if (!isNum(i.ms)) return;
-        var a = acc[i.name] = acc[i.name] || { v: [], boots: 0, worst: null };
-        a.v.push(i.ms);
-        if (!seen[i.name]) { a.boots++; seen[i.name] = 1; }
-        if (!a.worst || i.ms > a.worst.ms) a.worst = { ms: i.ms, b: b };
+        var x = inBoot[i.name] = inBoot[i.name] || { ms: 0, runs: 0 };
+        x.ms += i.ms; x.runs++;
+      });
+      Object.keys(inBoot).forEach(function (k) {
+        var a = acc[k] = acc[k] || { v: [], runs: 0, worst: null }, x = inBoot[k];
+        a.v.push(x.ms); a.runs += x.runs;
+        if (!a.worst || x.ms > a.worst.ms) a.worst = { ms: x.ms, b: b };
       });
     });
-    var rowsData = Object.keys(acc).map(function (k) { var a = acc[k]; return { name: k, boots: a.boots, med: median(a.v), p90: pct(a.v, 0.9), worst: a.worst }; })
+    var rowsData = Object.keys(acc).map(function (k) { var a = acc[k]; return { name: k, boots: a.v.length, runs: a.runs, med: median(a.v), p90: pct(a.v, 0.9), worst: a.worst }; })
       .sort(function (a, c) { return (c.p90 || 0) - (a.p90 || 0); }).slice(0, 40);
     if (!rowsData.length) { host.append(el('p', { class: 'empty' }, 'No data of this kind in the boots in view.')); return; }
-    var table = el('table', null, el('thead', null, el('tr', null, ['Item', 'Boots', 'Median', 'P90', 'Worst', 'Worst boot'].map(function (h, i) { return el('th', { scope: 'col', style: i === 1 ? 'text-align:right' : null }, h); }))));
+    var table = el('table', null, el('thead', null, el('tr', null, ['Item', 'Boots', 'Runs', 'Median', 'P90', 'Worst', 'Worst boot'].map(function (h, i) { return el('th', { scope: 'col', style: i === 1 ? 'text-align:right' : null }, h); }))));
     var body = el('tbody');
     rowsData.forEach(function (r) {
-      body.append(el('tr', null, el('td', { class: 'l' }, r.name), el('td', null, String(r.boots)), el('td', null, fmt(r.med)), el('td', null, fmt(r.p90)), el('td', null, fmt(r.worst.ms)),
+      body.append(el('tr', null, el('td', { class: 'l' }, r.name), el('td', null, String(r.boots)), el('td', null, String(r.runs)), el('td', null, fmt(r.med)), el('td', null, fmt(r.p90)), el('td', null, fmt(r.worst.ms)),
         el('td', null, el('button', { class: 'link', type: 'button', onclick: function () { state.selected = r.worst.b.id; update(); $('detail').scrollIntoView({ behavior: 'smooth' }); } }, dateLong(r.worst.b.bootStartMs)))));
     });
     table.append(body);
@@ -1070,13 +1103,17 @@
     });
     table.append(body);
   }
+  // Spreadsheet-safe CSV cell: numbers stay numbers; text that starts with = + - @ or a tab / CR / LF (what Excel and
+  // other spreadsheets read as a formula) gets a leading ' so it stays text; quotes, commas and any line break are quoted.
+  function csvCell(v) {
+    if (isNum(v)) return String(v);
+    var s = v == null ? '' : String(v);
+    if (/^[=+\-@\t\r\n]/.test(s)) s = "'" + s;
+    return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
   function downloadCsv() {
     var list = visible();
-    var q = function (s) {
-      s = s == null ? '' : String(s);
-      if (/^[=+@]/.test(s)) s = "'" + s;                 // never let a cell start a spreadsheet formula
-      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-    };
+    var q = csvCell;
     var devCols = [['Device', DEV.name], ['Serial', DEV.serial], ['Entra device ID', DEV.entraDeviceId], ['Intune device ID', DEV.intuneDeviceId],
       ['Collected', DATA.collectedMs ? new Date(DATA.collectedMs).toISOString() : null]];
     var devHead = devCols.map(function (c) { return q(c[0]); }), devVals = devCols.map(function (c) { return q(c[1]); });

@@ -67,7 +67,10 @@
 
 .PARAMETER Anonymize
     Replace account names with a stable per-name hash and drop SIDs; profile folder names inside paths and commands
-    become "~". Boots stay comparable without naming anyone. Earlier records in history.json are scrubbed as well.
+    become "~", and account names, account SIDs and e-mail addresses inside event messages, errors and comments are
+    replaced too. Boots stay comparable without naming anyone. Earlier records in history.json are scrubbed as well;
+    with -ReportOnly only the report is scrubbed. The hash is unsalted: this is pseudonymisation - a guessed name can be
+    hashed and compared.
 
 .PARAMETER FullRescan
     Re-read the full -Days window instead of only the logs written since the previous run (plus a 2-day overlap).
@@ -121,7 +124,7 @@ if (-not $OutputDir) {
     $OutputDir = if ($IsSystem) { Join-Path $env:ProgramData 'BootView' } else { Join-Path $ScriptRoot 'output' }
 }
 $SchemaVersion = 3        # 3: device.serial / entraDeviceId / intuneDeviceId / tenantId / anonymized, logon.sessions, toolVersion
-$ToolVersion = '1.1.0'
+$ToolVersion = '1.2.0'
 $MaxHistoryBoots = 365
 $IncrementalOverlapDays = 2   # a later run re-reads this much before its predecessor's collection time
 $WindowMs = [long]$WindowMinutes * 60000
@@ -163,26 +166,76 @@ function Initialize-Log {
 function Write-FileAtomic {
     # Write to a temp file and swap it in, so a run killed mid-write (e.g. an Intune timeout) never leaves a half file.
     param([string]$Path, [string]$Text)
-    $tmp = "$Path.tmp"
-    [IO.File]::WriteAllText($tmp, $Text, (New-Object System.Text.UTF8Encoding($false)))
-    Move-Item -LiteralPath $tmp -Destination $Path -Force
+    # a unique temp name per write, so two runs never write into each other's temp file
+    $tmp = '{0}.{1}.tmp' -f $Path, [guid]::NewGuid().ToString('N')
+    try {
+        [IO.File]::WriteAllText($tmp, $Text, (New-Object System.Text.UTF8Encoding($false)))
+        Move-Item -LiteralPath $tmp -Destination $Path -Force
+    }
+    finally { if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue } }
 }
+
+$NameHashRx = [regex]'^user-[0-9a-f]{12}$'
 
 function Protect-Name {
     # -Anonymize: an account name becomes a stable hash ("user-3f9a..."), so boots stay comparable without naming anyone.
-    param([string]$Name)
+    # This is pseudonymisation, not anonymisation: the hash is unsalted, so anyone can hash a candidate name and compare.
+    param([string]$Name, [switch]$NoRegister)
     if (-not $Name) { return $null }                     # a [string] parameter turns $null into '' - give the null back
-    if (-not $Anonymize -or $Name -like 'user-*') { return $Name }
+    if (-not $Anonymize -or $NameHashRx.IsMatch($Name)) { return $Name }   # only an exact hash counts as already done
+    if (-not $NoRegister) { Register-KnownName $Name }   # so free text that mentions the account is scrubbed as well
     $sha = [Security.Cryptography.SHA256]::Create()
     try { $h = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($Name.Trim().ToLowerInvariant())) } finally { $sha.Dispose() }
     'user-' + [BitConverter]::ToString($h, 0, 6).Replace('-', '').ToLowerInvariant()
 }
 
+# C:\Users\<profile folder>: the folder name may contain spaces ("C:\Users\Alice Smith\App.exe"); when no path separator
+# follows, it ends at the first space ("C:\Users\alice /q").
+$ProfilePathRx = [regex]'(?i)([\\/](?:Users|Documents and Settings)[\\/])(?:[^\\/"'':*?<>|\r\n]*[^\\/"'':*?<>|\s](?=[\\/])|[^\\/"'':*?<>|\s]+)'
+$SidRx = [regex]'(?i)\bS-1-(?:5-21|12-1)(?:-\d+){1,}'               # domain / local / Entra account SIDs
+$EmailRx = [regex]'(?i)\b[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+\b'  # UPNs in Entra ID / MDM messages
+$script:KnownNames = @{}                                             # lower-case variant -> hash
+$script:KnownNamesRx = $null
+
 function Protect-Path {
     # -Anonymize: profile folder names inside paths and commands (C:\Users\<name>\...) become "~".
     param([string]$Text)
     if (-not $Anonymize -or -not $Text) { return $Text }
-    [regex]::Replace($Text, '(?i)([\\/]Users[\\/])[^\\/"'' ]+', '$1~')
+    $ProfilePathRx.Replace($Text, '$1~')
+}
+
+function Register-KnownName {
+    # -Anonymize: remember an account name so free text (event messages, errors, comments) that mentions it is scrubbed too.
+    param([string]$Name)
+    if (-not $Anonymize -or -not $Name -or $NameHashRx.IsMatch($Name)) { return }
+    $n = $Name.Trim()
+    if ($n -match '^(?i)(NT AUTHORITY|NT SERVICE|BUILTIN|Window Manager|Font Driver Host|IIS APPPOOL)\\' -or $n.EndsWith('$')) { return }
+    $hash = Protect-Name $n -NoRegister
+    $variants = @($n)
+    if ($n -match '^[^\\]+\\(?<u>.+)$') { $variants += $Matches['u'] }   # DOMAIN\user -> also the bare user name
+    foreach ($v in $variants) {
+        if ($v.Length -lt 3) { continue }                                 # too short to replace safely in free text
+        $k = $v.ToLowerInvariant()
+        if (-not $script:KnownNames.ContainsKey($k)) { $script:KnownNames[$k] = $hash; $script:KnownNamesRx = $null }
+    }
+}
+
+function Protect-Text {
+    # -Anonymize for free text: profile folders, account SIDs, e-mail addresses / UPNs and every known account name.
+    param([string]$Text)
+    if (-not $Anonymize -or -not $Text -or $NameHashRx.IsMatch($Text)) { return $Text }
+    $t = $ProfilePathRx.Replace($Text, '$1~')
+    $t = $SidRx.Replace($t, 'S-~')
+    $t = $EmailRx.Replace($t, [Text.RegularExpressions.MatchEvaluator] { param($m) Protect-Name $m.Value -NoRegister })
+    if ($script:KnownNames.Count) {
+        if (-not $script:KnownNamesRx) {
+            # longest first, so "CONTOSO\alice" wins over "alice"
+            $alt = ($script:KnownNames.Keys | Sort-Object Length -Descending | ForEach-Object { [regex]::Escape($_) }) -join '|'
+            $script:KnownNamesRx = [regex]::new("(?<![\w-])(?:$alt)(?![\w-])", 'IgnoreCase')
+        }
+        $t = $script:KnownNamesRx.Replace($t, [Text.RegularExpressions.MatchEvaluator] { param($m) $script:KnownNames[$m.Value.ToLowerInvariant()] })
+    }
+    $t
 }
 
 function Resolve-Account {
@@ -192,26 +245,55 @@ function Resolve-Account {
         $n = $null
         try { $n = (New-Object Security.Principal.SecurityIdentifier($Sid)).Translate([Security.Principal.NTAccount]).Value } catch { }
         $script:AccountCache[$Sid] = $n
+        Register-KnownName $n
     }
     $script:AccountCache[$Sid]
 }
 
-function Protect-Boot {
-    # -Anonymize on a history that was collected without it: scrub the name fields of earlier records too.
+function Register-BootNames {
+    # -Anonymize: learn the clear account names an earlier, non-anonymised record holds, before they are hashed.
     param($Boot)
     if (-not $Anonymize -or -not $Boot) { return }
     $lg = $Boot.logon
     if ($lg) {
-        if ($lg.user) {
-            if ($lg.user.name) { $lg.user.name = Protect-Name $lg.user.name }
-            if ($lg.user.PSObject.Properties['sid']) { $lg.user.sid = $null }
+        if ($lg.user) { Register-KnownName $lg.user.name }
+        foreach ($s in @($lg.sessions)) { if ($s) { Register-KnownName $s.user } }
+    }
+    if ($Boot.policy) { foreach ($r in @($Boot.policy.runs)) { if ($r) { Register-KnownName $r.principal } } }
+    if ($Boot.shutdownReason) { Register-KnownName $Boot.shutdownReason.user }
+}
+
+function Protect-Value {
+    # Recursive: every string in the record goes through Protect-Text, every "sid" property is dropped.
+    param($Obj)
+    if ($Obj -is [pscustomobject]) {
+        foreach ($p in @($Obj.PSObject.Properties)) {
+            $v = $p.Value
+            if ($null -eq $v) { continue }
+            if ($p.Name -eq 'sid') { $Obj.($p.Name) = $null }
+            elseif ($v -is [string]) { $Obj.($p.Name) = Protect-Text $v }
+            elseif ($v -is [array]) {
+                for ($i = 0; $i -lt $v.Count; $i++) { if ($v[$i] -is [string]) { $v[$i] = Protect-Text $v[$i] } else { Protect-Value $v[$i] } }
+            }
+            elseif ($v -is [pscustomobject]) { Protect-Value $v }
         }
-        foreach ($s in @($lg.sessions)) { if ($s) { if ($s.user) { $s.user = Protect-Name $s.user }; if ($s.PSObject.Properties['sid']) { $s.sid = $null } } }
-        foreach ($a in @($lg.startupApps)) { if ($a -and $a.command) { $a.command = Protect-Path $a.command } }
+    }
+    elseif ($Obj -is [array]) { foreach ($x in $Obj) { Protect-Value $x } }
+}
+
+function Protect-Boot {
+    # -Anonymize, for every record (including earlier, non-anonymised ones): hash the account-name fields, drop SIDs,
+    # and scrub every other string (event messages, errors, commands, paths, comments, policy values).
+    param($Boot)
+    if (-not $Anonymize -or -not $Boot) { return }
+    $lg = $Boot.logon
+    if ($lg) {
+        if ($lg.user -and $lg.user.name) { $lg.user.name = Protect-Name $lg.user.name }
+        foreach ($s in @($lg.sessions)) { if ($s -and $s.user) { $s.user = Protect-Name $s.user } }
     }
     if ($Boot.policy) { foreach ($r in @($Boot.policy.runs)) { if ($r -and $r.principal) { $r.principal = Protect-Name $r.principal } } }
     if ($Boot.shutdownReason -and $Boot.shutdownReason.user) { $Boot.shutdownReason.user = Protect-Name $Boot.shutdownReason.user }
-    foreach ($g in @($Boot.degraders)) { if ($g -and $g.path) { $g.path = Protect-Path $g.path } }
+    Protect-Value $Boot
 }
 
 # ---------------------------------------------------------------- helpers
@@ -259,7 +341,7 @@ function ConvertTo-Bool {
 function Limit-Text {
     param([string]$Text, [int]$Max = 200)
     if (-not $Text) { return $Text }
-    $t = Protect-Path (($Text -replace '\s+', ' ').Trim())
+    $t = Protect-Text (($Text -replace '\s+', ' ').Trim())
     if ($t.Length -gt $Max) { $t = $t.Substring(0, $Max - 1) + [char]0x2026 }
     $t
 }
@@ -372,7 +454,8 @@ function Split-ByBoot {
 
 function Get-Pairs {
     # Match start/finish events (optionally by a key field or scriptblock) into {name,startMs,endMs,durMs}.
-    param($Rows, [int]$StartId, [int]$EndId, $Key, [switch]$KeepStatus)
+    # -NameField: the name comes from that field instead of the key; -WithUid adds the start event's user SID (uid).
+    param($Rows, [int]$StartId, [int]$EndId, $Key, [switch]$KeepStatus, [string]$NameField, [switch]$WithUid)
     $open = @{}
     $out = New-Object System.Collections.Generic.List[object]
     foreach ($r in ($Rows | Sort-Object T, Rec)) {
@@ -384,8 +467,10 @@ function Get-Pairs {
         }
         elseif ($open.ContainsKey($k) -and $open[$k].Count -gt 0) {
             $s = $open[$k].Dequeue()
-            $p = [pscustomobject]@{ name = $k; startMs = $s.T; endMs = $r.T; durMs = ($r.T - $s.T) }
+            $nm = if ($NameField) { [string]$s.D[$NameField] } else { $k }
+            $p = [pscustomobject]@{ name = $nm; startMs = $s.T; endMs = $r.T; durMs = ($r.T - $s.T) }
             if ($KeepStatus) { $p | Add-Member -NotePropertyName status -NotePropertyValue (ConvertTo-Number $r.D['Win32Status']) }
+            if ($WithUid) { $p | Add-Member -NotePropertyName uid -NotePropertyValue $s.Uid; $p | Add-Member -NotePropertyName row -NotePropertyValue $s }
             $out.Add($p)
         }
     }
@@ -626,26 +711,29 @@ function Build-Policy {
 
     if ($runs.Count -eq 0 -and $sys.Count -eq 0) { return $null }
     $sorted = @($runs | Sort-Object startMs)
-    $machine = $sorted | Where-Object { $_.scope -eq 'machine' -and $_.trigger -eq 'boot' } | Select-Object -First 1
-    $user = $sorted | Where-Object { $_.scope -eq 'user' -and $_.trigger -eq 'logon' } | Select-Object -First 1
-    $summ = {
-        param($run, $scope)
-        $s = $sys | Where-Object { $_.scope -eq $scope } | Select-Object -First 1
-        if (-not $run -and -not $s) { return $null }
-        [pscustomobject]@{
-            startMs  = if ($run) { $run.startMs } elseif ($s -and $null -ne $s.ms) { $s.t - $s.ms } else { $null }
-            endMs    = if ($run) { $run.endMs } elseif ($s) { $s.t } else { $null }
-            totalMs  = if ($run) { $run.totalMs } elseif ($s) { $s.ms } else { $null }
-            blocking = if ($run) { $run.blocking } else { $null }
-            ok       = if ($run) { ($run.errorCode -eq 0) } elseif ($s) { $s.ok } else { $null }
-            extensions = @(if ($run) { $run.extensions })
-        }
-    }
     [pscustomobject]@{
-        machine = & $summ $machine 'machine'
-        user    = & $summ $user 'user'
+        machine = Get-PolicySummary $sorted $sys 'machine'
+        user    = Get-PolicySummary $sorted $sys 'user'
         runs    = $sorted
         system  = $sys
+    }
+}
+
+function Get-PolicySummary {
+    # The boot's computer policy (first machine "boot" run) or user policy (first user "logon" run); without the
+    # GroupPolicy log, the first System-log result of that scope. Also rebuilt after a history merge.
+    param($Runs, $Sys, [string]$Scope)
+    $trigger = if ($Scope -eq 'machine') { 'boot' } else { 'logon' }
+    $run = @($Runs | Where-Object { $_ -and $_.scope -eq $Scope -and $_.trigger -eq $trigger } | Sort-Object startMs) | Select-Object -First 1
+    $s = @($Sys | Where-Object { $_ -and $_.scope -eq $Scope } | Sort-Object t) | Select-Object -First 1
+    if (-not $run -and -not $s) { return $null }
+    [pscustomobject]@{
+        startMs  = if ($run) { $run.startMs } elseif ($s -and $null -ne $s.ms) { $s.t - $s.ms } else { $null }
+        endMs    = if ($run) { $run.endMs } elseif ($s) { $s.t } else { $null }
+        totalMs  = if ($run) { $run.totalMs } elseif ($s) { $s.ms } else { $null }
+        blocking = if ($run) { $run.blocking } else { $null }
+        ok       = if ($run) { ($run.errorCode -eq 0) } elseif ($s) { $s.ok } else { $null }
+        extensions = @(if ($run) { $run.extensions })
     }
 }
 
@@ -674,45 +762,73 @@ function Build-Winlogon {
 function Build-Logon {
     param($Shell, $ProfRows, $Auth)
 
+    # Shell-Core and User Profile Service events carry the signed-in user's SID, so their start / finish events are paired
+    # per user (and profile loads per logon session too): overlapping sessions cannot cross-pair. Winlogon's
+    # authentication events are logged as SYSTEM, so the primary session is bounded by time instead (see below).
+    $span = { param($x) if ($x) { [pscustomobject]@{ name = $x.name; startMs = $x.startMs; endMs = $x.endMs; durMs = $x.durMs } } else { $null } }
+
     # first *successful* authentication (Win32Status 0) - a mistyped password shouldn't become the logon start
-    $authP = @(Get-Pairs $Auth 1 2 $null -KeepStatus) | Where-Object { $null -eq $_.status -or $_.status -eq 0 } | Select-Object -First 1
-    $failed = @(Get-Pairs $Auth 1 2 $null -KeepStatus | Where-Object { $null -ne $_.status -and $_.status -ne 0 }).Count
-    $profP = @(Get-Pairs $ProfRows 1 2 $null) | Select-Object -First 1
-    $tasks = @(Get-Pairs $Shell 62170 62171 'TaskName')
-    $all = $tasks | Where-Object { $_.name -eq 'AllLogonTasks' } | Select-Object -First 1
+    $authPairs = @(Get-Pairs $Auth 1 2 $null -KeepStatus)
+    $okAuth = @($authPairs | Where-Object { $null -eq $_.status -or $_.status -eq 0 } | Sort-Object startMs)
+    $failed = @($authPairs | Where-Object { $null -ne $_.status -and $_.status -ne 0 }).Count
+    $authP = $okAuth | Select-Object -First 1
+    # one record per profile load (= per interactive session): shared and multi-user devices sign in more than once per boot
+    $profs = @(Get-Pairs $ProfRows 1 2 { param($r) "$($r.Uid)|$($r.D['Session'])" } -WithUid | Sort-Object startMs, name)
+
+    # The primary session: the first successful sign-in, the profile load that follows it, and that user's logon tasks -
+    # all of them before the next sign-in begins, so one session's sign-in is never combined with another's tasks.
+    $lo = if ($authP) { [long]$authP.startMs - 5000 } else { [long]::MinValue }
+    $profP = $profs | Where-Object { $_.startMs -ge $lo } | Select-Object -First 1
+    $pStart = if ($authP) { [long]$authP.startMs } elseif ($profP) { [long]$profP.startMs } else { $null }
+    $puid = if ($profP) { $profP.uid } else { $null }
+    # Where the primary session's own events stop: another user's tasks are already told apart by their SID, so with a
+    # known user only that user's next sign-in counts; without one (no profile events), any next sign-in.
+    $later = @(if ($puid) {
+        @($profs | Where-Object { $_ -ne $profP -and $_.uid -eq $puid -and $_.startMs -gt $profP.startMs } | ForEach-Object { [long]$_.startMs })
+    } else {
+        @(@($okAuth | Select-Object -Skip 1 | ForEach-Object { [long]$_.startMs }) +
+            @($profs | Where-Object { $profP -and $_ -ne $profP -and $_.startMs -gt $profP.startMs } | ForEach-Object { [long]$_.startMs }))
+    })
+    $next = if ($later.Count) { [long]($later | Measure-Object -Minimum).Minimum } else { [long]::MaxValue }
+    $inPrimary = { param($x) ($null -eq $pStart -or $x.startMs -ge $pStart - 5000) -and $x.startMs -lt $next -and (-not $puid -or -not $x.uid -or $x.uid -eq $puid) }
+
+    $tasks = @(Get-Pairs $Shell 62170 62171 { param($r) "$($r.Uid)|$($r.D['TaskName'])" } -NameField TaskName -WithUid | Where-Object { & $inPrimary $_ })
+    $all = & $span ($tasks | Where-Object { $_.name -eq 'AllLogonTasks' } | Sort-Object startMs | Select-Object -First 1)
+    $rest = @($tasks | Where-Object { $_.name -ne 'AllLogonTasks' } | Sort-Object @{ e = 'durMs'; Descending = $true }, name | Select-Object -First $TopTasks | ForEach-Object { & $span $_ })
     # An empty pipeline yields "AutomationNull", which Windows PowerShell 5.1 serialises as {} - force a real $null.
     if (-not $authP) { $authP = $null }
-    if (-not $profP) { $profP = $null }
-    if (-not $all)   { $all = $null }
-    $rest = @($tasks | Where-Object { $_.name -ne 'AllLogonTasks' } | Sort-Object @{ e = 'durMs'; Descending = $true }, name | Select-Object -First $TopTasks)
+    $profOut = & $span $profP
+    if (-not $profOut) { $profOut = $null }
+    if (-not $all) { $all = $null }
 
-    # one record per profile load (= per interactive session): shared and multi-user devices sign in more than once per boot
-    $sessions = @(Get-Pairs $ProfRows 1 2 { param($r) "$($r.Uid)" } | Sort-Object startMs, name | ForEach-Object {
-            $sid = $_.name
+    $sessions = @($profs | ForEach-Object {
+            $sid = $_.uid
             [pscustomobject]@{
                 sid     = $(if ($Anonymize -or -not $sid) { $null } else { $sid })
                 user    = Protect-Name (Resolve-Account $sid)
+                session = ConvertTo-Number $_.row.D['Session']
                 startMs = $_.startMs; endMs = $_.endMs; durMs = $_.durMs
             }
         })
 
     $phases = @()
-    $phases += @(Get-Pairs $Shell 9648 9649 'psz')
-    $phases += @(Get-Pairs $Shell 9652 9653 'psz')
-    $phases += @(Get-Pairs $Shell 9703 9704 $null | ForEach-Object { $_.name = 'RunOnce commands'; $_ })
+    $phases += @(Get-Pairs $Shell 9648 9649 { param($r) "$($r.Uid)|$($r.D['psz'])" } -NameField psz)
+    $phases += @(Get-Pairs $Shell 9652 9653 { param($r) "$($r.Uid)|$($r.D['psz'])" } -NameField psz)
+    $phases += @(Get-Pairs $Shell 9703 9704 { param($r) "$($r.Uid)" } | ForEach-Object { $_.name = 'RunOnce commands'; $_ })
     $phases = @($phases | Where-Object { $_ } | Sort-Object startMs, endMs, name)
 
-    $batches = @(Get-Pairs $Shell 9705 9706 'KeyName' | Sort-Object startMs, name)     # one per Run / RunOnce key processed
-    $apps = @(@(Get-Pairs $Shell 9707 9708 'Command' | ForEach-Object { $_ | Add-Member -NotePropertyName kind -NotePropertyValue 'run key' -PassThru }) +
-        @(Get-Pairs $Shell 62408 62409 'Command' | ForEach-Object { $_ | Add-Member -NotePropertyName kind -NotePropertyValue 'packaged' -PassThru }) |
+    $batches = @(Get-Pairs $Shell 9705 9706 { param($r) "$($r.Uid)|$($r.D['KeyName'])" } -NameField KeyName | Sort-Object startMs, name)     # one per Run / RunOnce key processed
+    $apps = @(@(Get-Pairs $Shell 9707 9708 { param($r) "$($r.Uid)|$($r.D['Command'])" } -NameField Command | ForEach-Object { $_ | Add-Member -NotePropertyName kind -NotePropertyValue 'run key' -PassThru }) +
+        @(Get-Pairs $Shell 62408 62409 { param($r) "$($r.Uid)|$($r.D['Command'])" } -NameField Command | ForEach-Object { $_ | Add-Member -NotePropertyName kind -NotePropertyValue 'packaged' -PassThru }) |
         Where-Object { $_ } | ForEach-Object {
             [pscustomobject]@{ name = (Get-AppName $_.name); kind = $_.kind; command = (Limit-Text $_.name 160); startMs = $_.startMs; endMs = $_.endMs; durMs = $_.durMs }
         } | Sort-Object @{ e = 'durMs'; Descending = $true }, command | Select-Object -First $TopApps)
 
-    # who signed in, and what kind of profile (from the first logon's profile events)
+    # who signed in, and what kind of profile (the primary session's profile events; 67 is logged as SYSTEM, so by time)
     $user = $null
-    $p1 = $ProfRows | Where-Object { $_.Id -eq 1 } | Select-Object -First 1
-    $p67 = $ProfRows | Where-Object { $_.Id -eq 67 } | Select-Object -First 1
+    $p1 = if ($profP) { $profP.row } else { $ProfRows | Where-Object { $_.Id -eq 1 } | Select-Object -First 1 }
+    $p67lo = if ($profP) { [long]$profP.startMs } else { [long]::MinValue }
+    $p67 = $ProfRows | Where-Object { $_.Id -eq 67 -and $_.T -ge $p67lo -and $_.T -lt $next } | Sort-Object T | Select-Object -First 1
     if ($p1 -or $p67) {
         $name = $null
         if ($p1 -and $p1.Uid) { $name = Resolve-Account $p1.Uid }
@@ -729,7 +845,7 @@ function Build-Logon {
     [pscustomobject]@{
         auth           = $authP
         failedAuth     = $failed
-        profile        = $profP
+        profile        = $profOut
         user           = $user
         allTasks       = $all
         tasks          = $rest
@@ -912,8 +1028,10 @@ function Read-ImeLogs {
             $rows.Add([pscustomobject]@{ T = $t; F = $kind; Y = [int]$m.Groups['y'].Value; H = $m.Groups['h'].Value; M = $m.Groups['m'].Value.Trim(); Rec = $rows.Count; A = $null })
         }
     }
-    $status = if ($rows.Count) { 'ok' } elseif ($denied -and $denied -eq $files.Count) { 'denied' } else { 'empty' }
-    Set-Source $label $status $rows.Count $(if ($status -eq 'denied') { 'Requires an elevated session.' } else { $null })
+    # 'partial': some log files could not be read, so the IME detail may be incomplete
+    $status = if ($denied -and $denied -eq $files.Count) { 'denied' } elseif ($denied) { 'partial' } elseif ($rows.Count) { 'ok' } else { 'empty' }
+    $msg = if ($status -eq 'denied') { 'Requires an elevated session.' } elseif ($status -eq 'partial') { "$denied of $($files.Count) log files could not be read." } else { $null }
+    Set-Source $label $status $rows.Count $msg
     $rows
 }
 
@@ -1034,13 +1152,15 @@ function Add-Derived {
 
     $dur = { param($x) if ($x -and $x.endMs -and $x.startMs) { [long]($x.endMs - $x.startMs) } else { $null } }
     $signInMs = if ($au) { [long]$au.startMs - $s0 } elseif ($pr) { [long]$pr.startMs - $s0 } else { $null }
-    $waitMs = & $dur $wait
+    # The wait is only known when both ends are: sign-in screen ready and authentication start. Without the first,
+    # boot and the user's delay cannot be told apart, so the wait - and every total that excludes it - stays unknown.
+    $waitMs = if ($screenReady -and $au) { [math]::Max([long]0, [long]$au.startMs - $screenReady) } else { $null }
     $readyMs = if ($tk -and $endMs) { $endMs - $s0 } else { $null }          # only when AllLogonTasks finished
-    $readyExcl = if ($null -ne $readyMs) { $readyMs - [long]$waitMs } else { $null }
+    $readyExcl = if ($null -ne $readyMs -and $null -ne $waitMs) { $readyMs - $waitMs } else { $null }
     $totals = [pscustomobject]@{
         firmwareMs           = $fwMs
         loaderMs             = $ldMs
-        coreBootMs           = if ($screenReady) { $screenReady - $s0 } else { $signInMs }      # to the sign-in screen
+        coreBootMs           = if ($screenReady) { $screenReady - $s0 } else { $null }          # to the sign-in screen (measured only)
         signInWaitMs         = $waitMs
         toSignInMs           = $signInMs
         authMs               = & $dur $au
@@ -1082,15 +1202,79 @@ function Test-Empty {
     ($null -eq $Value) -or (($Value -is [array]) -and @($Value).Count -eq 0)
 }
 
+# How each list in a boot record is merged with the copy in history: records are matched by identity ("key"), so a
+# re-read that sees only part of a boot (log rollover, or a boot that started before this run's window) adds to what an
+# earlier run saw instead of replacing it. "post" re-sorts and applies the same cap the collector applies.
+$ByStart = { param($x) "$($x.startMs)" }
+$MergeSpecs = @{
+    'winlogon'               = @{ key = { param($x) "$($x.event)|$($x.subscriber)|$($x.startMs)" }; post = { param($a) $a | Sort-Object startMs, endMs, event, subscriber | Select-Object -First $TopSubscribers } }
+    'degraders'              = @{ key = { param($x) "$($x.kind)|$($x.name)" }; post = { param($a) $a | Sort-Object { if ($null -ne $_.degradationMs) { $_.degradationMs } else { 0 } }, name -Descending | Select-Object -First $TopDegraders } }
+    'issues'                 = @{ key = { param($x) "$($x.id)|$($x.t)" }; post = { param($a) $a | Sort-Object t, id | Select-Object -First $TopIssues } }
+    'logon.tasks'            = @{ key = { param($x) "$($x.name)|$($x.startMs)" }; post = { param($a) $a | Sort-Object @{ e = 'durMs'; Descending = $true }, name | Select-Object -First $TopTasks } }
+    'logon.shellPhases'      = @{ key = { param($x) "$($x.name)|$($x.startMs)" }; post = { param($a) $a | Sort-Object startMs, endMs, name } }
+    'logon.startupBatches'   = @{ key = { param($x) "$($x.name)|$($x.startMs)" }; post = { param($a) $a | Sort-Object startMs, name } }
+    'logon.startupApps'      = @{ key = { param($x) "$($x.command)|$($x.startMs)" }; post = { param($a) $a | Sort-Object @{ e = 'durMs'; Descending = $true }, command | Select-Object -First $TopApps } }
+    'logon.sessions'         = @{ key = $ByStart; post = { param($a) $a | Sort-Object startMs } }
+    'policy.runs'            = @{ key = { param($x) "$($x.activityId)" }; post = { param($a) $a | Sort-Object startMs } }
+    'policy.system'          = @{ key = { param($x) "$($x.id)|$($x.t)" }; post = { param($a) $a | Sort-Object t, id } }
+    'network.connects'       = @{ key = { param($x) "$($x.t)" }; post = { param($a) $a | Sort-Object t | Select-Object -First 5 } }
+    'mdm.sessions'           = @{ key = $ByStart; post = { param($a) $a | Sort-Object startMs } }
+    'mdm.policies'           = @{ key = { param($x) "$($x.t)|$($x.op)|$($x.policy)|$($x.area)|$($x.scope)" }; post = { param($a) $a | Sort-Object t, policy | Select-Object -First $TopMdmPolicies } }
+    'mdm.bursts'             = @{ key = $ByStart; post = { param($a) $a | Sort-Object startMs } }
+    'mdm.areas'              = @{ key = { param($x) "$($x.name)" }; prefer = 'count'; post = { param($a) $a | Sort-Object @{ e = 'count'; Descending = $true }, name | Select-Object -First 40 } }
+    'mdm.errors'             = @{ key = { param($x) "$($x.id)|$($x.t)" }; post = { param($a) $a | Sort-Object t, id | Select-Object -First $TopMdmErrors } }
+    'ime.units'              = @{ key = { param($x) "$($x.kind)|$($x.id)|$($x.log)|$($x.startMs)" }; post = { param($a) $a | Sort-Object @{ e = 'durMs'; Descending = $true }, startMs | Select-Object -First $TopImeUnits | Sort-Object startMs } }
+    'ime.files'              = @{ key = { param($x) "$($x.name)" }; prefer = 'lines'; post = { param($a) $a | Sort-Object firstMs, name } }
+    'ime.errors'             = @{ key = { param($x) "$($x.text)" }; prefer = 'count'; post = { param($a) $a | Sort-Object @{ e = 'count'; Descending = $true }, text | Select-Object -First 12 } }
+    'shutdownPerf.degraders' = @{ key = { param($x) "$($x.kind)|$($x.name)" }; post = { param($a) $a | Sort-Object { if ($null -ne $_.degradationMs) { $_.degradationMs } else { 0 } }, name -Descending | Select-Object -First $TopDegraders } }
+}
+$MergeMax = @('logon.failedAuth', 'mdm.policyCount')          # counts: the larger one saw more
+$MergeMin = @('ime.firstMs', 'network.firstConnectedMs')       # first-seen times: the earlier one saw more
+
+function Get-Completeness {
+    # how many properties carry a value - a partial re-read of the same record has fewer
+    param($X)
+    if ($X -isnot [pscustomobject]) { return 0 }
+    @($X.PSObject.Properties | Where-Object { -not (Test-Empty $_.Value) -and "$($_.Value)" -ne '' }).Count
+}
+
+function Merge-List {
+    # Union of two lists by record identity. On a match the more complete record wins (ties: $New).
+    param($New, $Old, $Spec)
+    $map = [ordered]@{}
+    foreach ($x in @($Old)) { if ($null -ne $x) { $map[[string](& $Spec.key $x)] = $x } }
+    foreach ($x in @($New)) {
+        if ($null -eq $x) { continue }
+        $k = [string](& $Spec.key $x)
+        if ($map.Contains($k)) {
+            $o = $map[$k]
+            $keepOld = if ($Spec.prefer) { [double]$o.($Spec.prefer) -gt [double]$x.($Spec.prefer) } else { (Get-Completeness $o) -gt (Get-Completeness $x) }
+            if (-not $keepOld) { $map[$k] = $x }
+        }
+        else { $map[$k] = $x }
+    }
+    $items = @($map.Values)
+    @(& $Spec.post $items)
+}
+
 function Merge-Section {
-    # Fill properties missing (null / empty) in $New from $Old - one level deep.
-    param($New, $Old)
+    # Fill properties missing (null / empty) in $New from $Old - one level deep; lists are merged record by record.
+    param($New, $Old, [string]$Path)
     if ($null -eq $Old) { return $New }
     if ($null -eq $New) { return $Old }
     if ($New -isnot [pscustomobject] -or $Old -isnot [pscustomobject]) { return $New }
     foreach ($p in $Old.PSObject.Properties) {
         $np = $New.PSObject.Properties[$p.Name]
-        if ((-not $np -or (Test-Empty $np.Value)) -and -not (Test-Empty $p.Value)) {
+        $key = "$Path.$($p.Name)"
+        $spec = $MergeSpecs[$key]
+        if ($np -and $spec -and -not (Test-Empty $np.Value) -and -not (Test-Empty $p.Value)) {
+            $New.($p.Name) = @(Merge-List $np.Value $p.Value $spec)
+        }
+        elseif ($np -and $null -ne $np.Value -and $null -ne $p.Value -and ($key -in $MergeMax -or $key -in $MergeMin)) {
+            $a = [double]$np.Value; $b = [double]$p.Value
+            if (($key -in $MergeMax -and $b -gt $a) -or ($key -in $MergeMin -and $b -lt $a)) { $New.($p.Name) = $p.Value }
+        }
+        elseif ((-not $np -or (Test-Empty $np.Value)) -and -not (Test-Empty $p.Value)) {
             if ($np) { $New.($p.Name) = $p.Value } else { $New | Add-Member -NotePropertyName $p.Name -NotePropertyValue $p.Value }
         }
     }
@@ -1099,16 +1283,42 @@ function Merge-Section {
 
 function Merge-Boot {
     # Keep whatever an earlier run saw that this run no longer can (logs roll over). Derived fields are rebuilt.
+    # $New wins where both have a value; for a boot this run saw only part of, the caller passes the history copy as $New.
     param($New, $Old)
     if ($null -eq $Old) { return $New }
     foreach ($p in $Old.PSObject.Properties) {
         if ($p.Name -in 'phases', 'totals') { continue }
         $np = $New.PSObject.Properties[$p.Name]
         if (-not $np) { $New | Add-Member -NotePropertyName $p.Name -NotePropertyValue $p.Value; continue }
+        $spec = $MergeSpecs[$p.Name]
         if (Test-Empty $np.Value) { $New.($p.Name) = $p.Value }
-        elseif ($np.Value -is [pscustomobject]) { $New.($p.Name) = Merge-Section $np.Value $p.Value }
+        elseif ($spec -and -not (Test-Empty $p.Value)) { $New.($p.Name) = @(Merge-List $np.Value $p.Value $spec) }
+        elseif ($np.Value -is [pscustomobject]) { $New.($p.Name) = Merge-Section $np.Value $p.Value $p.Name }
     }
-    $New
+    Update-Merged $New
+}
+
+function Update-Merged {
+    # Counts and summaries that depend on merged lists are rebuilt from them.
+    param($Boot)
+    $lg = $Boot.logon
+    if ($lg -and $lg.PSObject.Properties['sessions']) {
+        $n = @($lg.sessions | Where-Object { $_ }).Count
+        if ($lg.PSObject.Properties['sessionCount']) { $lg.sessionCount = $n } else { $lg | Add-Member -NotePropertyName sessionCount -NotePropertyValue $n }
+    }
+    $m = $Boot.mdm
+    if ($m -and $m.PSObject.Properties['policyCount']) {
+        $n = @($m.policies | Where-Object { $_ }).Count
+        if ($null -eq $m.policyCount -or $n -gt $m.policyCount) { $m.policyCount = $n }
+    }
+    $po = $Boot.policy
+    if ($po -and ((Test-Empty $po.runs) -eq $false -or (Test-Empty $po.system) -eq $false)) {
+        foreach ($sc in 'machine', 'user') {
+            $s = Get-PolicySummary @($po.runs) @($po.system) $sc
+            if ($s) { if ($po.PSObject.Properties[$sc]) { $po.$sc = $s } else { $po | Add-Member -NotePropertyName $sc -NotePropertyValue $s } }
+        }
+    }
+    $Boot
 }
 
 # ---------------------------------------------------------------- device
@@ -1174,6 +1384,29 @@ function Get-DeviceInfo {
     $d
 }
 
+function Test-SameDevice {
+    # Is a saved history from this device? MachineGuid and BIOS serial decide when both sides have them (a renamed device
+    # is still the same device, a cloned image with a copied MachineGuid but another serial is not); the computer name
+    # is only the fallback for files that carry neither.
+    param($Saved, $Current)
+    if (-not $Saved) { return $false }
+    $strong = $false
+    foreach ($k in 'deviceId', 'serial') {
+        $a = "$($Saved.$k)"; $b = "$($Current.$k)"
+        if ($a -and $b) { if ($a -ne $b) { return $false }; $strong = $true }
+    }
+    if ($strong) { return $true }
+    [bool]($Saved.name -and $Saved.name -eq $Current.name)
+}
+
+function Test-BootRecord {
+    # Minimal shape check before an earlier record is trusted: valid JSON is not necessarily a BootView boot.
+    param($Boot)
+    ($Boot -is [pscustomobject]) -and ($Boot.id -is [long] -or $Boot.id -is [int] -or $Boot.id -is [decimal] -or $Boot.id -is [double]) -and
+    ($Boot.bootStartMs -is [long] -or $Boot.bootStartMs -is [int] -or $Boot.bootStartMs -is [decimal] -or $Boot.bootStartMs -is [double]) -and
+    [long]$Boot.id -eq [long]$Boot.bootStartMs -and [long]$Boot.bootStartMs -gt 946684800000
+}
+
 function Write-Report {
     # Embeds the JSON into the viewer template and writes a single self-contained HTML file. Returns its path.
     param([string]$Json)
@@ -1192,17 +1425,44 @@ function Write-Report {
 # ================================================================= main
 
 $exitCode = 0
+$runLock = $null
 try {
     Initialize-Log $OutputDir
     $utf8 = New-Object System.Text.UTF8Encoding($false)
     $historyPath = Join-Path $OutputDir 'history.json'
     $latestPath = Join-Path $OutputDir 'latest.json'
 
+    # One run at a time per output folder: two runs would each read history, merge and write, and one would lose the
+    # other's update. The lock is an exclusively opened file, released when this process exits (also when killed).
+    $lockPath = Join-Path $OutputDir 'BootView.lock'
+    $lockUntil = (Get-Date).AddSeconds(120)
+    while (-not $runLock) {
+        try { $runLock = [IO.File]::Open($lockPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None) }
+        catch [IO.IOException] {
+            $ie = if ($_.Exception.InnerException) { $_.Exception.InnerException } else { $_.Exception }
+            if ($ie -is [IO.DirectoryNotFoundException] -or $ie -is [IO.PathTooLongException]) { throw }     # not a lock held by another run
+            if ((Get-Date) -gt $lockUntil) { throw "Another BootView run is still using $OutputDir (waited 120 s)." }
+            Start-Sleep -Milliseconds 500
+        }
+    }
+
     if ($ReportOnly) {
         if (-not (Test-Path $historyPath)) { throw "No history at $historyPath - run the collector first." }
-        $reportPath = Write-Report ([IO.File]::ReadAllText($historyPath, $utf8))
+        $json = [IO.File]::ReadAllText($historyPath, $utf8)
+        if ($Anonymize) {
+            # -ReportOnly -Anonymize: the report is scrubbed; history.json on disk is left as it is
+            $h = $json | ConvertFrom-Json
+            $rb = @($h.boots | Where-Object { $_ })
+            foreach ($b in $rb) { Repair-EmptyObjects $b; Register-BootNames $b }
+            foreach ($b in $rb) { Protect-Boot $b }
+            $h.boots = $rb
+            if ($h.device) { if ($h.device.PSObject.Properties['anonymized']) { $h.device.anonymized = $true } else { $h.device | Add-Member -NotePropertyName anonymized -NotePropertyValue $true } }
+            $json = ConvertTo-Json -InputObject $h -Depth 32 -Compress
+        }
+        $reportPath = Write-Report $json
         Write-RunLog "Report:   $reportPath"
         if ($Open -and $reportPath) { Start-Process $reportPath }
+        $runLock.Dispose(); $runLock = $null
         exit 0
     }
 
@@ -1210,21 +1470,42 @@ try {
     $device = Get-DeviceInfo
 
     # Existing history is read first: a later run only needs the logs written since the previous one.
-    $old = @{}; $prevCollectedMs = $null
+    $old = @{}; $prevCollectedMs = $null; $oldFields = $null; $prevAnonymized = $false
     if (Test-Path $historyPath) {
+        $h = $null
         try {
             # read as UTF-8 explicitly: Windows PowerShell 5.1's Get-Content treats BOM-less files as ANSI
             $h = [IO.File]::ReadAllText($historyPath, $utf8) | ConvertFrom-Json
-            foreach ($b in @($h.boots)) { Repair-EmptyObjects $b; $old[[string]$b.id] = $b }
-            if ($h.collectedMs -and $h.device -and $h.device.name -eq $device.name) { $prevCollectedMs = [long]$h.collectedMs }
+            if ($h -isnot [pscustomobject] -or ($h.tool -and $h.tool -ne 'BootView') -or -not $h.PSObject.Properties['boots']) { throw 'not a BootView history file' }
         }
         catch {
             $bak = '{0}.{1:yyyyMMdd-HHmmss}.bak' -f $historyPath, (Get-Date)
             Write-RunLog "Could not read existing history ($($_.Exception.Message)); keeping it as $bak and starting fresh." 'WARN'
             Move-Item -LiteralPath $historyPath -Destination $bak -Force
-            $old = @{}
+            $h = $null
+        }
+        if ($h -and $h.device -and -not (Test-SameDevice $h.device $device)) {
+            # another device's history (a copied or shared output folder): never relabel it as this device
+            $q = '{0}.foreign-{1}-{2:yyyyMMdd-HHmmss}.json' -f ($historyPath -replace '\.json$', ''), ($h.device.name -replace '[^\w.-]', '_'), (Get-Date)
+            Write-RunLog "history.json belongs to another device ($($h.device.name)); moved it to $q and starting fresh. Use one output folder per device." 'WARN'
+            Move-Item -LiteralPath $historyPath -Destination $q -Force
+            $h = $null
+        }
+        if ($h) {
+            $bad = 0
+            foreach ($b in @($h.boots)) {
+                if (-not (Test-BootRecord $b)) { $bad++; continue }
+                Repair-EmptyObjects $b
+                foreach ($k in 'phases', 'totals') { if (-not $b.PSObject.Properties[$k]) { $b | Add-Member -NotePropertyName $k -NotePropertyValue $null } }
+                $old[[string]$b.id] = $b
+            }
+            if ($bad) { Write-RunLog "Skipped $bad malformed boot record(s) in history.json." 'WARN' }
+            if ($h.collectedMs) { $prevCollectedMs = [long]$h.collectedMs }
+            $oldFields = $h.fieldsSeen
+            $prevAnonymized = ($h.device -and $h.device.anonymized -eq $true)
         }
     }
+    foreach ($b in $old.Values) { Register-BootNames $b }          # -Anonymize: learn names from non-anonymised records
     $since = (Get-Date).AddDays(-$Days)
     $incremental = $false
     if (-not $FullRescan -and $prevCollectedMs) {
@@ -1252,13 +1533,39 @@ try {
     $perfRows  = @(Read-Events -Label 'Diagnostics-Performance'      -LogName 'Microsoft-Windows-Diagnostics-Performance/Operational' -Id 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 200, 201, 202, 203 -Since $since)
     $gpRows    = @(Read-Events -Label 'Group Policy'                 -LogName 'Microsoft-Windows-GroupPolicy/Operational' -Id 4000, 4001, 4002, 4003, 4004, 4005, 4006, 4007, 4016, 5016, 6016, 7016, 5017, 7017, 5126, 5257, 5308, 5311, 5312, 5313, 5314, 5326, 7326, 5340, 5351, 7320, 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007 -Since $since)
     $imeRows   = @(Read-ImeLogs -Since $since)
-    if ($script:ImeStats.Count -and $script:Sources['Intune Management Extension']) {
-        $script:Sources['Intune Management Extension'].message = 'Matched: ' + (($script:ImeStats.GetEnumerator() | ForEach-Object { "$($_.Key) x$($_.Value)" }) -join '; ')
+    $imeSrc = $script:Sources['Intune Management Extension']
+    if ($script:ImeStats.Count -and $imeSrc) {
+        $matched = 'Matched: ' + (($script:ImeStats.GetEnumerator() | ForEach-Object { "$($_.Key) x$($_.Value)" }) -join '; ')
+        $imeSrc.message = if ($imeSrc.message) { "$($imeSrc.message) $matched" } else { $matched }
     }
 
     $starts = @($bootRows | Where-Object { $_.Id -eq 12 } | Sort-Object T | ForEach-Object { [long]$_.T })
+    $newStarts = $starts.Count
+
+    # The boot that was already running when this run's window begins: its start (event 12) is older than $since, but
+    # its later events (more sign-ins, policy refreshes, its shutdown) are in the window. Without its start they would be
+    # dropped, or land in no boot at all. Its start comes from the System log if it is still there, else from history.
+    # Only a boot history already knows is updated - a boot seen only in part has no record to complete.
+    $sinceMs = ConvertTo-EpochMs $since
+    $carry = $null
+    try {
+        $pe = Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-Kernel-General'; Id = 12; EndTime = $since } -MaxEvents 1 -ErrorAction Stop
+        if ($pe) { $carry = ConvertTo-EpochMs @($pe)[0].TimeCreated }
+    } catch { }
+    if (-not $carry) {
+        $prior = @($old.Values | Where-Object { [long]$_.bootStartMs -lt $sinceMs } | ForEach-Object { [long]$_.bootStartMs } | Sort-Object)
+        if ($prior.Count) { $carry = $prior[-1] }
+    }
+    $carryKnown = $false
+    if ($carry -and ($starts.Count -eq 0 -or $carry -lt $starts[0])) {
+        $carryKnown = $old.ContainsKey([string]$carry)
+        $starts = @([long]$carry) + $starts               # its bucket also keeps its rows away from the next boot
+    }
+    else { $carry = $null }
+
     $collected = New-Object System.Collections.Generic.List[object]
-    if ($starts.Count -eq 0) {
+    $partialIds = @{}
+    if ($newStarts -eq 0 -and -not $carryKnown) {
         if ($old.Count -eq 0) { throw 'No boot events (Kernel-General 12) found in the System log for the requested range.' }
         Write-RunLog 'No boots in the log window; refreshing history and report from earlier runs.'
     }
@@ -1281,13 +1588,21 @@ try {
 
         for ($i = 0; $i -lt $starts.Count; $i++) {
             $s0 = $starts[$i]
+            $isCarry = ($null -ne $carry -and $s0 -eq $carry)
+            if ($isCarry -and -not $carryKnown) { continue }        # rows of a boot history never saw: leave them out
             $shut = $bBoot[$i] | Where-Object { $_.Id -eq 13 } | Select-Object -First 1
             $k12 = $bBoot[$i] | Where-Object { $_.Id -eq 12 } | Select-Object -First 1
             $typ = $bKb[$i] | Where-Object { $_.Id -eq 27 } | Select-Object -First 1
             $logon = Build-Logon -Shell $bShell[$i] -ProfRows $bProf[$i] -Auth $bAuth[$i]
 
-            # background work counts for this boot while it is near boot start or near sign-in
+            # background work counts for this boot while it is near boot start or near sign-in. For the carried-over
+            # boot, "sign-in" is the primary sign-in history recorded, not whichever later session this run sees first.
             $ls = if ($logon -and $logon.auth) { [long]$logon.auth.startMs } elseif ($logon -and $logon.profile) { [long]$logon.profile.startMs } else { $null }
+            if ($isCarry) {
+                $ol = $old[[string]$s0].logon
+                $ls = if ($ol -and $ol.auth -and $ol.auth.startMs) { [long]$ol.auth.startMs } elseif ($ol -and $ol.profile -and $ol.profile.startMs) { [long]$ol.profile.startMs } else { $null }
+                $partialIds[[string]$s0] = 1
+            }
             $inWin = { param($t) ($t -le $s0 + $WindowMs) -or ($ls -and $t -ge $ls - 60000 -and $t -le $ls + $WindowMs) }
             $win = { param($rows) @($rows | Where-Object { & $inWin $_.T }) }
             $gpWin = @($bGp[$i] | Where-Object { & $inWin $_.T })
@@ -1325,9 +1640,11 @@ try {
 
     # merge with history so the record outlives event-log rollover
     $merged = @{}
+    $oldIds = @{}; foreach ($k in $old.Keys) { $oldIds[$k] = 1 }
     foreach ($b in $collected) {
         $key = [string]$b.id
-        $merged[$key] = Merge-Boot $b $old[$key]
+        # a boot this run saw only part of: what history recorded wins, this run adds what is new (sessions, shutdown, ...)
+        $merged[$key] = if ($partialIds.ContainsKey($key)) { Merge-Boot $old[$key] $b } else { Merge-Boot $b $old[$key] }
         $old.Remove($key)
     }
     foreach ($key in $old.Keys) {
@@ -1339,11 +1656,21 @@ try {
     }
     $boots = @($merged.Values | Sort-Object bootStartMs)
     if ($boots.Count -gt $MaxHistoryBoots) { $boots = @($boots | Select-Object -Last $MaxHistoryBoots) }     # trim before deriving
-    foreach ($b in $boots) { Protect-Boot $b }                                      # covers values merged in from older runs
+    # -Anonymize covers values merged in from older runs too; records an earlier anonymised run wrote and this run did
+    # not touch are already scrubbed
+    $touched = @{}; foreach ($b in $collected) { $touched[[string]$b.id] = 1 }
+    foreach ($b in $boots) { if (-not $prevAnonymized -or $touched.ContainsKey([string]$b.id)) { Protect-Boot $b } }
     $boots = @($boots | ForEach-Object { Add-Derived $_ })
 
     $collectedMs = ConvertTo-EpochMs (Get-Date)
     $newIds = @{}; foreach ($b in $collected) { $newIds[[string]$b.id] = 1 }
+    $newCount = @($collected | Where-Object { -not $oldIds.ContainsKey([string]$_.id) }).Count
+    # field names seen by this and earlier runs, so the schema diagnostics outlive log rollover too
+    if ($oldFields -is [pscustomobject]) {
+        foreach ($p in $oldFields.PSObject.Properties) {
+            $script:FieldsSeen[$p.Name] = @(@($p.Value) + @($script:FieldsSeen[$p.Name]) | Where-Object { $_ } | Sort-Object -Unique)
+        }
+    }
     $payload = {
         param($bootList)
         [pscustomobject]@{
@@ -1387,7 +1714,7 @@ try {
     } | ForEach-Object { Write-RunLog $_ }
 
     Write-RunLog ''
-    Write-RunLog ("History:  {0}  ({1} boots, {2} from this run)" -f $historyPath, $boots.Count, $collected.Count)
+    Write-RunLog ("History:  {0}  ({1} boots: {2} new, {3} re-read on this run)" -f $historyPath, $boots.Count, $newCount, ($collected.Count - $newCount))
     Write-RunLog ("Latest:   {0}" -f $latestPath)
     if ($reportPath) { Write-RunLog ("Report:   {0}" -f $reportPath) }
     $deniedCount = @($script:Sources.Values | Where-Object { $_.status -eq 'denied' }).Count
@@ -1395,8 +1722,8 @@ try {
         Write-RunLog 'Some sources need elevation (boot trace, Group Policy detail, Intune Management Extension logs). Re-run from an elevated PowerShell, or as SYSTEM through Intune.' 'WARN'
     }
     $last = $boots[-1]
-    $summary = 'BootView OK: {0} boots in history, {1} new; last boot {2:yyyy-MM-dd HH:mm} ready in {3}; {4} source(s) need elevation; {5:N1}s' -f
-        $boots.Count, $collected.Count, [DateTimeOffset]::FromUnixTimeMilliseconds($last.bootStartMs).LocalDateTime, (& $fmt $last.totals.readyExclWaitMs), $deniedCount, $sw.Elapsed.TotalSeconds
+    $summary = 'BootView OK: {0} boots in history, {1} new, {2} re-read; last boot {3:yyyy-MM-dd HH:mm} ready in {4}; {5} source(s) need elevation; {6:N1}s' -f
+        $boots.Count, $newCount, ($collected.Count - $newCount), [DateTimeOffset]::FromUnixTimeMilliseconds($last.bootStartMs).LocalDateTime, (& $fmt $last.totals.readyExclWaitMs), $deniedCount, $sw.Elapsed.TotalSeconds
     Write-RunLog $summary -NoConsole
     Write-Output $summary          # last line of stdout: Intune keeps it in the script / remediation output
     if ($Open -and $reportPath) { Start-Process $reportPath }
@@ -1407,4 +1734,5 @@ catch {
     Write-RunLog $msg 'ERROR'
     Write-Output $msg
 }
+finally { if ($runLock) { $runLock.Dispose() } }
 exit $exitCode
